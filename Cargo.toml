@@ -1,0 +1,50 @@
+[package]
+name = "mycommercial"
+version = "0.1.0"
+edition = "2021"
+description = "Application de prospection commerciale LinkedIn avec IA locale"
+authors = ["CVE Solutions"]
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OAuth2 for LinkedIn
+oauth2 = "4"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# URL encoding
+urlencoding = "2"
+
+# Directories for config
+dirs = "6"
+
+# Text wrapping for AI summaries
+textwrap = "0.16"
