@@ -1,6 +1,6 @@
 [package]
 name = "mycommercial"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Application de prospection commerciale LinkedIn avec IA locale"
 authors = ["CVE Solutions"]
@@ -17,7 +17,7 @@ MyCommercial est une application de prospection commerciale automatisée.
 Elle se connecte à LinkedIn, recherche des décideurs (CEO, CTO, RSSI) dans \
 des entreprises filtrées par taille et code APE via les données DataGouv, \
 génère des messages personnalisés avec une IA locale (Ollama), et assure \
-le suivi CRM via Odoo. Interface TUI interactive."""
+le suivi CRM via Odoo. Interface graphique native."""
 depends = "libc6 (>= 2.31)"
 section = "utils"
 priority = "optional"
@@ -41,9 +41,10 @@ assets = [
 glibc = ">= 2.17"
 
 [dependencies]
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
+# GUI native
+eframe = "0.31"
+egui = "0.31"
+egui_extras = { version = "0.31", features = ["datepicker"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -81,8 +82,8 @@ urlencoding = "2"
 # Directories for config
 dirs = "6"
 
-# Text wrapping for AI summaries
-textwrap = "0.16"
-
 # Open browser for OAuth2 callback
 open = "5"
+
+# Image for logo/icons
+image = { version = "0.25", default-features = false, features = ["png"] }
