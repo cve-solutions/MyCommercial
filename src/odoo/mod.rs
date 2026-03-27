@@ -12,6 +12,7 @@ pub struct OdooClient {
     url: String,
     database: String,
     uid: Option<i64>,
+    username: String,
     password: String,
     enabled: bool,
 }
@@ -43,6 +44,7 @@ impl OdooClient {
             url: settings.odoo_url(),
             database: settings.get_or_default("odoo", "database", ""),
             uid: None,
+            username: settings.get_or_default("odoo", "username", ""),
             password: settings.get_or_default("odoo", "password", ""),
             enabled: settings.odoo_enabled(),
         }
@@ -58,7 +60,6 @@ impl OdooClient {
             anyhow::bail!("Intégration Odoo désactivée");
         }
 
-        let username = self.password.clone(); // Will be fixed below
         let url = format!("{}/jsonrpc", self.url);
 
         let request = JsonRpcRequest {
@@ -68,7 +69,7 @@ impl OdooClient {
             params: serde_json::json!({
                 "service": "common",
                 "method": "authenticate",
-                "args": [&self.database, &username, &self.password, {}]
+                "args": [&self.database, &self.username, &self.password, {}]
             }),
         };
 

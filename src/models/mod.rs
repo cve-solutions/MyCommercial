@@ -141,6 +141,19 @@ pub struct Solution {
     pub date_creation: Option<String>,
 }
 
+impl std::fmt::Display for Entreprise {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}) - {} {}", self.nom, self.siren, self.code_ape,
+            self.ville.as_deref().unwrap_or(""))
+    }
+}
+
+impl std::fmt::Display for Contact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} - {}", self.prenom, self.nom, self.poste)
+    }
+}
+
 // ── Search Criteria ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -170,13 +170,16 @@ impl LinkedInClient {
         Ok(())
     }
 
-    /// Génère l'URL d'autorisation OAuth2
+    /// Génère l'URL d'autorisation OAuth2 et ouvre le navigateur
     pub fn oauth2_auth_url(client_id: &str, redirect_uri: &str) -> String {
-        format!(
+        let url = format!(
             "https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={}&redirect_uri={}&scope=r_liteprofile%20r_emailaddress%20w_member_social",
             urlencoding::encode(client_id),
             urlencoding::encode(redirect_uri),
-        )
+        );
+        // Try to open in browser
+        let _ = open::that(&url);
+        url
     }
 
     /// Échange un code OAuth2 contre un token d'accès

@@ -421,6 +421,70 @@ pub fn get_solutions(db: &DbPool) -> Result<Vec<Solution>> {
     Ok(results)
 }
 
+// ── Solutions update ──
+
+pub fn update_solution_summary(db: &DbPool, sol_id: i64, summary: &str) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE solutions SET resume_ia = ?2 WHERE id = ?1",
+        params![sol_id, summary],
+    )?;
+    Ok(())
+}
+
+pub fn delete_contact(db: &DbPool, contact_id: i64) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute("DELETE FROM messages WHERE contact_id = ?1", params![contact_id])?;
+    conn.execute("DELETE FROM contacts WHERE id = ?1", params![contact_id])?;
+    Ok(())
+}
+
+pub fn update_message_odoo_lead(db: &DbPool, msg_id: i64, lead_id: i64) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE messages SET odoo_lead_id = ?2 WHERE id = ?1",
+        params![msg_id, lead_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_entreprises(db: &DbPool, limit: u32, offset: u32) -> Result<Vec<Entreprise>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT siren, siret, nom, code_ape, libelle_ape, tranche_effectifs,
+                categorie_entreprise, adresse, code_postal, ville
+         FROM entreprises ORDER BY nom LIMIT ?1 OFFSET ?2"
+    )?;
+    let rows = stmt.query_map(params![limit, offset], |row| {
+        Ok(Entreprise {
+            siren: row.get(0)?,
+            siret: row.get(1)?,
+            nom: row.get(2)?,
+            code_ape: row.get(3)?,
+            libelle_ape: row.get(4)?,
+            tranche_effectifs: row.get(5)?,
+            categorie_entreprise: row.get(6)?,
+            adresse: row.get(7)?,
+            code_postal: row.get(8)?,
+            ville: row.get(9)?,
+        })
+    })?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+pub fn count_messages_today(db: &DbPool) -> Result<u32> {
+    let conn = db.lock().unwrap();
+    let count: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE status != 'draft' AND date_envoi >= date('now')",
+        [], |row| row.get(0)
+    )?;
+    Ok(count)
+}
+
 // ── Rapport / Stats ──
 
 pub fn get_rapport_stats(db: &DbPool) -> Result<RapportStats> {

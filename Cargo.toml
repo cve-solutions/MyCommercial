@@ -48,3 +48,6 @@ dirs = "6"
 
 # Text wrapping for AI summaries
 textwrap = "0.16"
+
+# Open browser for OAuth2 callback
+open = "5"
