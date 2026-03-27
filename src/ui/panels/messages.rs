@@ -1,0 +1,139 @@
+use egui;
+use crate::db;
+use crate::models::MessageStatus;
+use crate::ui::app::MyCommercialApp;
+use crate::ui::theme;
+
+pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
+    ui.horizontal(|ui| {
+        ui.heading(theme::heading("Messages"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("\u{1f504} Rafraîchir").clicked() { app.refresh_data(); }
+            ui.label(theme::subheading(&format!("{} messages", app.messages.len())));
+        });
+    });
+    ui.add_space(8.0);
+
+    let mut action: Option<MsgAction> = None;
+
+    // ── Table ──
+    let available = ui.available_height() - 80.0;
+    egui::ScrollArea::vertical().max_height(available).show(ui, |ui| {
+        egui_extras::TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(egui_extras::Column::exact(130.0))  // Contact
+            .column(egui_extras::Column::exact(130.0))  // Entreprise
+            .column(egui_extras::Column::exact(100.0))  // Statut
+            .column(egui_extras::Column::exact(110.0))  // Date
+            .column(egui_extras::Column::remainder())    // Aperçu
+            .column(egui_extras::Column::exact(180.0))  // Actions
+            .header(22.0, |mut header| {
+                header.col(|ui| { ui.strong("Contact"); });
+                header.col(|ui| { ui.strong("Entreprise"); });
+                header.col(|ui| { ui.strong("Statut"); });
+                header.col(|ui| { ui.strong("Date envoi"); });
+                header.col(|ui| { ui.strong("Aperçu"); });
+                header.col(|ui| { ui.strong("Actions"); });
+            })
+            .body(|mut body| {
+                for (i, (msg, contact)) in app.messages.iter().enumerate() {
+                    body.row(24.0, |mut row| {
+                        row.col(|ui| {
+                            ui.label(format!("{} {}", contact.prenom, contact.nom));
+                        });
+                        row.col(|ui| {
+                            ui.label(contact.entreprise_nom.as_deref().unwrap_or("—"));
+                        });
+                        row.col(|ui| {
+                            let color = status_color(&msg.status);
+                            ui.label(egui::RichText::new(msg.status.as_str()).color(color).strong());
+                        });
+                        row.col(|ui| {
+                            ui.label(msg.date_envoi.as_deref().unwrap_or("—"));
+                        });
+                        row.col(|ui| {
+                            let preview: String = msg.contenu.chars().take(60).collect();
+                            ui.label(egui::RichText::new(preview).color(theme::TEXT_DIM));
+                        });
+                        row.col(|ui| {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("\u{1f504} Statut").clicked() {
+                                    action = Some(MsgAction::CycleStatus(i));
+                                }
+                                if ui.small_button("\u{1f4e4} Odoo").clicked() {
+                                    action = Some(MsgAction::SyncOdoo(i));
+                                }
+                            });
+                        });
+                    });
+                }
+            });
+    });
+
+    // ── Detail panel ──
+    if let Some(sel) = app.message_selected {
+        if let Some((msg, contact)) = app.messages.get(sel) {
+            ui.add_space(5.0);
+            ui.group(|ui| {
+                ui.label(theme::subheading(&format!("Message à {} {} ({})", contact.prenom, contact.nom, msg.status.as_str())));
+                ui.add_space(4.0);
+                ui.label(&msg.contenu);
+            });
+        }
+    }
+
+    // Process actions
+    match action {
+        Some(MsgAction::CycleStatus(idx)) => {
+            if let Some((msg, _)) = app.messages.get(idx) {
+                if let Some(mid) = msg.id {
+                    let ns = next_status(&msg.status);
+                    let _ = db::update_message_status(&app.db, mid, &ns);
+                    app.toast(format!("Statut → {}", ns.as_str()), theme::INFO);
+                    app.refresh_data();
+                }
+            }
+        }
+        Some(MsgAction::SyncOdoo(idx)) => {
+            if let Some((msg, contact)) = app.messages.get(idx).cloned() {
+                if let Some(mid) = msg.id {
+                    let sn = app.solutions.first().map(|s| s.nom.clone()).unwrap_or_default();
+                    app.launch_odoo_sync(contact, msg.contenu, mid, sn);
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+enum MsgAction {
+    CycleStatus(usize),
+    SyncOdoo(usize),
+}
+
+fn next_status(s: &MessageStatus) -> MessageStatus {
+    match s {
+        MessageStatus::Draft => MessageStatus::Sent,
+        MessageStatus::Sent => MessageStatus::Delivered,
+        MessageStatus::Delivered => MessageStatus::Read,
+        MessageStatus::Read => MessageStatus::Replied,
+        MessageStatus::Replied => MessageStatus::Interested,
+        MessageStatus::Interested => MessageStatus::NotInterested,
+        MessageStatus::NotInterested => MessageStatus::NoResponse,
+        MessageStatus::NoResponse => MessageStatus::Draft,
+    }
+}
+
+fn status_color(s: &MessageStatus) -> egui::Color32 {
+    match s {
+        MessageStatus::Draft => theme::MUTED,
+        MessageStatus::Sent | MessageStatus::Delivered => theme::PRIMARY,
+        MessageStatus::Read => theme::INFO,
+        MessageStatus::Replied => theme::WARNING,
+        MessageStatus::Interested => theme::SUCCESS,
+        MessageStatus::NotInterested => theme::DANGER,
+        MessageStatus::NoResponse => theme::TEXT_DIM,
+    }
+}

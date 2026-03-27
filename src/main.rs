@@ -21,13 +21,12 @@ fn get_db_path() -> PathBuf {
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("mycommercial");
-
     std::fs::create_dir_all(&data_dir).ok();
     data_dir.join("mycommercial.db")
 }
 
 fn main() -> Result<()> {
-    // Initialize logging to file to avoid polluting TUI
+    // Logging to file
     let log_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("mycommercial");
@@ -39,10 +38,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
 
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with_writer(std::sync::Mutex::new(log_file))
         .with_ansi(false)
         .init();
@@ -50,11 +46,26 @@ fn main() -> Result<()> {
     let db_path = get_db_path();
     tracing::info!("Base de données: {}", db_path.display());
 
-    // Create tokio runtime for async operations
+    // Tokio runtime for async ops
     let runtime = tokio::runtime::Runtime::new()?;
+    let db = db::init_db(&db_path)?;
 
-    // Launch TUI with async runtime
-    ui::app::run_app(&db_path, &runtime)?;
+    // Launch egui native window
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("MyCommercial - Prospection LinkedIn")
+            .with_inner_size([1280.0, 800.0])
+            .with_min_inner_size([900.0, 600.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "MyCommercial",
+        native_options,
+        Box::new(move |cc| {
+            Ok(Box::new(ui::app::MyCommercialApp::new(cc, db, runtime)))
+        }),
+    ).map_err(|e| anyhow::anyhow!("Erreur eframe: {}", e))?;
 
     Ok(())
 }
