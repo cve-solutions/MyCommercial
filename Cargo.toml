@@ -1,0 +1,88 @@
+[package]
+name = "mycommercial"
+version = "0.1.0"
+edition = "2021"
+description = "Application de prospection commerciale LinkedIn avec IA locale"
+authors = ["CVE Solutions"]
+license = "Proprietary"
+repository = "https://github.com/cve-solutions/MyCommercial"
+readme = "README.md"
+
+# ── Packaging .deb (Debian/Ubuntu) ──
+[package.metadata.deb]
+maintainer = "CVE Solutions <contact@cve-solutions.fr>"
+copyright = "2026, CVE Solutions"
+extended-description = """\
+MyCommercial est une application de prospection commerciale automatisée.
+Elle se connecte à LinkedIn, recherche des décideurs (CEO, CTO, RSSI) dans \
+des entreprises filtrées par taille et code APE via les données DataGouv, \
+génère des messages personnalisés avec une IA locale (Ollama), et assure \
+le suivi CRM via Odoo. Interface TUI interactive."""
+depends = "libc6 (>= 2.31)"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/mycommercial", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/mycommercial/", "644"],
+]
+
+# ── Packaging .rpm (RHEL/Fedora/Rocky) ──
+[package.metadata.generate-rpm]
+name = "mycommercial"
+summary = "Application de prospection commerciale LinkedIn avec IA locale"
+license = "Proprietary"
+url = "https://github.com/cve-solutions/MyCommercial"
+assets = [
+    { source = "target/release/mycommercial", dest = "/usr/bin/mycommercial", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/mycommercial/README.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = ">= 2.17"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OAuth2 for LinkedIn
+oauth2 = "4"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# URL encoding
+urlencoding = "2"
+
+# Directories for config
+dirs = "6"
+
+# Text wrapping for AI summaries
+textwrap = "0.16"
+
+# Open browser for OAuth2 callback
+open = "5"
