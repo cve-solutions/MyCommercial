@@ -3,7 +3,7 @@
 ## Table des matieres
 
 - [Demarrage](#demarrage)
-- [Navigation generale](#navigation-generale)
+- [Interface generale](#interface-generale)
 - [Dashboard](#1-dashboard)
 - [Recherche](#2-recherche)
 - [Contacts](#3-contacts)
@@ -12,7 +12,6 @@
 - [Rapports](#6-rapports)
 - [Settings](#7-settings)
 - [Workflow complet](#workflow-complet)
-- [Raccourcis clavier](#raccourcis-clavier)
 
 ---
 
@@ -22,460 +21,437 @@
 mycommercial
 ```
 
-L'application demarre sur le **Dashboard** avec 7 onglets navigables.
-
-```
-┌─ MyCommercial - Prospection LinkedIn ──────────────────────────────┐
-│ 1 Dashboard  2 Recherche  3 Contacts  4 Messages  5 Solutions ... │
-└────────────────────────────────────────────────────────────────────┘
-```
+Une fenetre native s'ouvre (1280x800, theme sombre) avec 7 onglets.
 
 ---
 
-## Navigation generale
+## Interface generale
 
 ```mermaid
 graph LR
-    D[1 Dashboard] <--> S[2 Recherche]
-    S <--> C[3 Contacts]
-    C <--> M[4 Messages]
-    M <--> SOL[5 Solutions]
-    SOL <--> R[6 Rapports]
-    R <--> SET[7 Settings]
+    subgraph TOPBAR["Barre de navigation"]
+        D["Dashboard"]
+        S["Recherche"]
+        C["Contacts"]
+        M["Messages"]
+        SOL["Solutions"]
+        R["Rapports"]
+        SET["Settings"]
+    end
 
-    style D fill:#f9f,stroke:#333
-    style S fill:#bbf,stroke:#333
-    style C fill:#bfb,stroke:#333
-    style M fill:#fbf,stroke:#333
-    style SOL fill:#ffb,stroke:#333
-    style R fill:#bff,stroke:#333
-    style SET fill:#fbb,stroke:#333
+    subgraph CONTENT["Zone principale"]
+        PANEL["Contenu de l'onglet actif"]
+    end
+
+    subgraph BOTTOM["Barre de notifications"]
+        TOAST["Toasts: succes, erreurs, infos"]
+    end
+
+    D --> PANEL
+    S --> PANEL
+    C --> PANEL
+    M --> PANEL
+    SOL --> PANEL
+    R --> PANEL
+    SET --> PANEL
+
+    style TOPBAR fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style CONTENT fill:#1e293b,stroke:#64748b,color:#e2e8f0
+    style BOTTOM fill:#1e293b,stroke:#94a3b8,color:#e2e8f0
 ```
 
-| Touche | Action |
-|--------|--------|
-| `Tab` / `Shift+Tab` | Onglet suivant / precedent |
-| `1` a `7` | Aller directement a l'onglet N |
-| `F1` | Afficher l'aide complete |
-| `q` | Quitter l'application |
-| `Ctrl+C` | Quitter immediatement |
-| `r` | Rafraichir les donnees (dans la plupart des onglets) |
+### Elements de l'interface
+
+| Element | Description |
+|---------|-------------|
+| **Barre de navigation** | Onglets cliquables en haut, spinner si chargement async |
+| **Zone principale** | Contenu adaptatif selon l'onglet (tableaux, formulaires, graphiques) |
+| **Toasts** | Notifications temporaires (4s) en bas : succes (vert), erreur (rouge), info (cyan) |
+| **Modales** | Fenetres d'erreur et d'edition centrees avec fond assombri |
+
+### Theme couleurs
+
+| Couleur | Usage |
+|---------|-------|
+| Bleu (#3b82f6) | Elements principaux, liens, boutons primaires |
+| Vert (#22c55e) | Succes, statut "Interesse", connexions actives |
+| Jaune (#eab308) | Avertissements, statut "Repondu", KPIs importants |
+| Rouge (#ef4444) | Erreurs, statut "KO", deconnecte |
+| Cyan (#06b6d4) | Information, statut "Lu", valeurs settings |
+| Gris (#94a3b8) | Texte secondaire, elements inactifs |
 
 ---
 
 ## 1. Dashboard
 
-Le Dashboard affiche une vue d'ensemble de votre activite de prospection.
+Vue d'ensemble de l'activite de prospection.
 
-```
-┌─ Contacts ──┐┌─ Messages ──┐┌─ Interesses ┐┌─ Taux rep. ─┐
-│     42      ││     128     ││      8      ││   12.5%     │
-└─────────────┘└─────────────┘└─────────────┘└─────────────┘
-┌─ Funnel de Prospection ──────────────────────────────────┐
-│  ████████████████  Envoyes: 128                          │
-│  ██████████████    Lus: 96                               │
-│  ██████            Reponses: 24                          │
-│  ████              Interesses: 8                         │
-│  ██                KO: 16                                │
-└──────────────────────────────────────────────────────────┘
-┌─ Connexions ─────────────────────────────────────────────┐
-│  LinkedIn: Connecte  |  Ollama: mistral  |  Odoo: Active │
-└──────────────────────────────────────────────────────────┘
+### Elements affiches
+
+```mermaid
+graph TD
+    subgraph CARDS["Cartes statistiques"]
+        C1["Contacts<br/><b>42</b>"]
+        C2["Messages envoyes<br/><b>128</b>"]
+        C3["Interesses<br/><b>8</b>"]
+        C4["Taux reponse<br/><b>12.5%</b>"]
+    end
+
+    subgraph FUNNEL["Funnel de Prospection"]
+        F1["Envoyes ████████████████ 128"]
+        F2["Lus ██████████████ 96"]
+        F3["Reponses ██████ 24"]
+        F4["Interesses ████ 8"]
+        F5["KO ██ 16"]
+    end
+
+    subgraph STATUS["Connexions"]
+        S1["LinkedIn: Connecte"]
+        S2["Ollama: mistral"]
+        S3["Odoo: Active"]
+    end
+
+    style CARDS fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style FUNNEL fill:#1e293b,stroke:#22c55e,color:#e2e8f0
+    style STATUS fill:#1e293b,stroke:#eab308,color:#e2e8f0
 ```
 
-**Raccourcis :** `r` = rafraichir
+- **4 cartes KPI** : contacts, messages, interesses, taux de reponse
+- **Funnel** : barres de progression colorees (envoyes → lus → reponses → OK/KO)
+- **Statut connexions** : badges vert/rouge pour LinkedIn, Ollama, Odoo
+- **Bouton Rafraichir** : recharge toutes les stats depuis la BDD
 
 ---
 
 ## 2. Recherche
 
-L'onglet Recherche permet de trouver des entreprises et des contacts.
+Recherche d'entreprises et de contacts avec 2 modes.
 
-### Modes de recherche
-
-```mermaid
-flowchart TD
-    R[Recherche] -->|Touche 'e'| ENT[Mode Entreprises]
-    R -->|Touche 'l'| LIN[Mode LinkedIn]
-
-    ENT -->|API ouverte| DG[recherche-entreprises.api.gouv.fr]
-    DG --> RES1[Liste d'entreprises]
-    RES1 --> CACHE[(Cache SQLite)]
-
-    LIN -->|Authentifie| API[LinkedIn API]
-    API --> RES2[Liste de contacts]
-    RES2 -->|Touche 's'| SAVE[Sauvegarder en BDD]
-```
-
-### Recherche d'entreprises (mode par defaut)
-
-1. Appuyer sur `i` ou `/` pour ouvrir la saisie
-2. Taper le nom de l'entreprise ou un mot-cle
-3. Appuyer sur `Enter` pour valider
-4. Les resultats s'affichent avec SIREN, nom, code APE, ville, effectifs
-
-```
-┌─ Recherche - Entreprises (API ouverte) ──────────────────┐
-│ cybersecurite [Entreprises (API ouverte)]                │
-└──────────────────────────────────────────────────────────┘
-┌─ Entreprises DataGouv (25) ──────────────────────────────┐
-│ SIREN     │ Nom                  │ APE    │ Ville  │ Eff │
-│ 123456789 │ CyberProtect SAS     │ 62.01Z │ Paris  │ 22  │
-│ 987654321 │ SecureNet France     │ 62.02A │ Lyon   │ 41  │
-└──────────────────────────────────────────────────────────┘
-```
-
-### Recherche LinkedIn
-
-1. Appuyer sur `l` pour basculer en mode LinkedIn
-2. Appuyer sur `i`, taper la recherche, `Enter`
-3. Les contacts LinkedIn apparaissent
-4. Appuyer sur `s` pour sauvegarder un contact en base
-
-### Raccourcis Recherche
-
-| Touche | Action |
-|--------|--------|
-| `i` ou `/` | Saisir une recherche |
-| `e` | Mode Entreprises (API ouverte) |
-| `l` | Mode LinkedIn |
-| `Enter` | Lancer la recherche |
-| `s` | Sauvegarder le contact selectionne (mode LinkedIn) |
-| `Up/Down` | Naviguer dans les resultats |
-
----
-
-## 3. Contacts
-
-Liste de tous les contacts sauvegardes en base de donnees.
-
-```
-┌─ Contacts (42) - naviguer | m=Message | d=Supprimer | Page 1 ──┐
-│ Prenom  │ Nom       │ Poste        │ Entreprise      │ LinkedIn│
-│ Jean    │ Dupont    │ CEO          │ CyberProtect    │ V       │
-│ Marie   │ Martin    │ CTO          │ SecureNet       │ V       │
-│ Pierre  │ Bernard   │ RSSI         │ DataShield      │ -       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Actions sur les contacts
+### Mode Entreprises (API ouverte)
 
 ```mermaid
 sequenceDiagram
     participant U as Utilisateur
     participant MC as MyCommercial
-    participant AI as Ollama
-    participant DB as SQLite
+    participant API as recherche-entreprises.api.gouv.fr
 
-    U->>MC: Selectionne un contact (Up/Down)
-    U->>MC: Appuie sur 'm'
-    MC->>AI: Generer message personnalise
-    AI-->>MC: Message genere
-    MC->>DB: Sauvegarde brouillon
-    MC-->>U: "Message brouillon cree !"
-    Note over U: Voir onglet Messages
+    U->>MC: Tape "cybersecurite" + clic Rechercher
+    MC->>API: GET /search?q=cybersecurite
+    Note over MC: Spinner + Toast "Chargement..."
+    API-->>MC: 25 resultats (total: 342)
+    MC->>MC: Cache en SQLite
+    MC-->>U: Tableau avec SIREN, Nom, APE, Ville, Effectifs
 ```
 
-| Touche | Action |
+1. Taper un mot-cle dans la barre de recherche
+2. Selectionner le mode **Entreprises** (bouton toggle)
+3. Cliquer **Rechercher** ou appuyer sur Entree
+4. Les resultats s'affichent dans un tableau triable et redimensionnable
+
+**Colonnes :** SIREN | Nom | Code APE | Libelle APE | Ville | Effectifs
+
+### Mode LinkedIn
+
+1. Selectionner le mode **LinkedIn** (bouton toggle)
+2. Taper un mot-cle, cliquer Rechercher
+3. Les contacts s'affichent avec un bouton **Sauver** par ligne
+4. Cliquer **Sauver** enregistre le contact en base
+
+**Colonnes :** Prenom | Nom | Poste | Entreprise | [Sauver]
+
+---
+
+## 3. Contacts
+
+Liste de tous les contacts sauvegardes.
+
+### Actions par contact
+
+```mermaid
+flowchart LR
+    C[Contact selectionne] -->|Clic "Message IA"| G[Ollama genere un message]
+    G --> B[Brouillon sauvegarde]
+    B --> MSG[Visible dans onglet Messages]
+
+    C -->|Clic "Suppr"| D[Contact supprime]
+```
+
+| Bouton | Action |
 |--------|--------|
-| `Up/Down` | Naviguer dans la liste |
-| `m` | Generer un message IA pour le contact selectionne |
-| `d` | Supprimer le contact |
-| `PageUp/PageDown` | Page precedente / suivante |
-| `r` | Rafraichir |
+| **Message IA** | Genere un message de prospection personnalise via Ollama |
+| **Suppr** | Supprime le contact et ses messages associes |
+| **Rafraichir** | Recharge la liste depuis la BDD |
+| **Page precedente / suivante** | Pagination par 100 contacts |
+
+**Colonnes :** Prenom | Nom | Poste | Entreprise | LinkedIn (coche) | Actions
 
 ---
 
 ## 4. Messages
 
-Suivi de tous les messages de prospection envoyes.
+Suivi de tous les messages de prospection.
 
 ### Cycle de statut
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Brouillon
-    Brouillon --> Envoye : s
-    Envoye --> Delivre : s
-    Delivre --> Lu : s
-    Lu --> Repondu : s
-    Repondu --> Interesse : s
-    Interesse --> PasInteresse : s
-    PasInteresse --> SansReponse : s
-    SansReponse --> Brouillon : s
+    [*] --> Brouillon : Creation
+    Brouillon --> Envoye : Clic "Statut"
+    Envoye --> Delivre : Clic "Statut"
+    Delivre --> Lu : Clic "Statut"
+    Lu --> Repondu : Clic "Statut"
+    Repondu --> Interesse : Clic "Statut"
+    Interesse --> PasInteresse : Clic "Statut"
+    PasInteresse --> SansReponse : Clic "Statut"
+    SansReponse --> Brouillon : Clic "Statut"
 
-    Interesse --> [*] : Lead OK
-    PasInteresse --> [*] : Lead KO
+    Interesse --> OdooCRM : Clic "Odoo"
+    PasInteresse --> OdooCRM : Clic "Odoo"
+
+    state OdooCRM {
+        [*] --> Lead
+        Lead --> Probabilite70 : Interesse
+        Lead --> Probabilite0 : KO
+    }
 ```
 
-Appuyez sur `s` pour faire cycler le statut du message selectionne.
-
-### Synchronisation Odoo
-
-Appuyez sur `o` sur un message pour creer un **lead CRM** dans Odoo avec :
-- Nom du contact et poste
-- Entreprise
-- Contenu du message
-- Probabilite selon le statut (Interesse = 70%, Repondu = 30%, KO = 0%)
-
-| Touche | Action |
+| Bouton | Action |
 |--------|--------|
-| `Up/Down` | Naviguer |
-| `s` | Changer le statut (cycle) |
-| `o` | Synchroniser vers Odoo CRM |
-| `r` | Rafraichir |
+| **Statut** | Fait cycler le statut au suivant |
+| **Odoo** | Cree un lead CRM dans Odoo avec probabilite selon le statut |
+
+**Colonnes :** Contact | Entreprise | Statut (colore) | Date envoi | Apercu message | Actions
+
+### Couleurs de statut
+
+| Statut | Couleur |
+|--------|---------|
+| Brouillon | Gris |
+| Envoye / Delivre | Bleu |
+| Lu | Cyan |
+| Repondu | Jaune |
+| Interesse | Vert |
+| Pas interesse | Rouge |
+| Sans reponse | Gris fonce |
 
 ---
 
 ## 5. Solutions
 
-Gestion des documents solutions a promouvoir aupres des contacts.
+Gestion des documents et solutions commerciales.
 
-### Workflow Solutions
+### Interface en deux panneaux
 
 ```mermaid
-flowchart TD
-    A[Appuyer sur 'a'] --> B[Saisir le nom]
-    B --> C[Saisir la description]
-    C --> D[Saisir le chemin fichier]
-    D --> E[Solution sauvegardee]
-    E --> F{Appuyer sur 'g'}
-    F --> G[Ollama lit le fichier/description]
-    G --> H[Resume IA genere]
-    H --> I[Utilise pour generer les messages]
+graph LR
+    subgraph LEFT["Liste des solutions"]
+        S1["CyberShield Pro"]
+        S2["DataGuard Suite"]
+        S3["CloudArmor"]
+    end
 
-    style H fill:#bfb,stroke:#333
-    style I fill:#fbf,stroke:#333
+    subgraph RIGHT["Detail solution"]
+        NOM["Nom: CyberShield Pro"]
+        DESC["Description: Solution de<br/>cybersecurite complete..."]
+        FILE["Fichier: /docs/cybershield.pdf"]
+        RESUME["Resume IA: CyberShield Pro offre<br/>une protection zero-trust..."]
+        BTN["Bouton: Generer/Regenerer"]
+    end
+
+    S1 -->|Selection| RIGHT
+
+    style LEFT fill:#1e293b,stroke:#64748b,color:#e2e8f0
+    style RIGHT fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
 ```
 
 ### Ajouter une solution
 
-1. Appuyer sur `a`
-2. Saisir le **nom** de la solution > `Enter`
-3. Saisir la **description** > `Enter`
-4. Saisir le **chemin du fichier** (ou laisser vide) > `Enter`
+1. Cliquer **+ Ajouter une solution** (en haut a droite)
+2. Remplir le formulaire :
+   - **Nom** : Nom commercial de la solution
+   - **Description** : Description detaillee
+   - **Fichier** : Chemin vers un document (PDF, TXT, MD - optionnel)
+3. Cliquer **Sauvegarder**
 
 ### Generer un resume IA
 
-1. Selectionner une solution avec `Up/Down`
-2. Appuyer sur `g`
-3. Ollama lit le fichier ou la description
-4. Le resume apparait dans le panneau de detail
+```mermaid
+sequenceDiagram
+    participant U as Utilisateur
+    participant MC as MyCommercial
+    participant OL as Ollama
 
-```
-┌─ Solutions ────────────┐┌─ Detail Solution ──────────────────────┐
-│ > CyberShield Pro      ││ Nom: CyberShield Pro                  │
-│   DataGuard Suite      ││                                       │
-│   CloudArmor           ││ Description: Solution de cybersecurite│
-│                        ││ complete pour PME et ETI...            │
-│                        ││                                       │
-│                        ││ Fichier: /docs/cybershield.pdf         │
-│                        ││                                       │
-│                        ││ Resume IA:                             │
-│ a=Ajouter              ││ CyberShield Pro offre une protection  │
-│ g=Resume IA            ││ zero-trust avec un ROI de 40% sur les │
-│                        ││ couts de securite des PME.             │
-└────────────────────────┘└────────────────────────────────────────┘
+    U->>MC: Selectionne une solution + clic "Resume IA"
+    MC->>MC: Lit le fichier ou la description
+    MC->>OL: POST /api/generate (resume en 2-3 phrases)
+    Note over MC: Toast "Resume IA en cours..."
+    OL-->>MC: Resume percutant pour decideurs
+    MC->>MC: Sauvegarde en SQLite
+    MC-->>U: Resume affiche en vert dans le detail
 ```
 
-| Touche | Action |
-|--------|--------|
-| `Up/Down` | Naviguer dans la liste |
-| `a` | Ajouter une nouvelle solution |
-| `g` | Generer un resume IA (Ollama) |
-| `r` | Rafraichir |
+1. Selectionner une solution dans la liste
+2. Cliquer **Generer / Regenerer** dans le panneau de detail
+3. Le resume est genere par Ollama et sauvegarde en BDD
+4. Ce resume est utilise pour personnaliser les messages de prospection
 
 ---
 
 ## 6. Rapports
 
-Vue detaillee des statistiques de prospection avec funnel de conversion.
+Statistiques detaillees et funnel de conversion.
 
-```
-┌─ Statistiques detaillees ────────────────────────────────┐
-│                                                          │
-│  Total contacts:       42                                │
-│  Messages envoyes:     128                               │
-│  Messages lus:         96                                │
-│  Reponses recues:      24                                │
-│  Interesses:           8                                 │
-│  Pas interesses (KO):  16                                │
-│  Sans reponse (>7j):   32                                │
-│                                                          │
-│  Taux de reponse:      18.8%                             │
-│  Taux d'interet:       33.3%                             │
-└──────────────────────────────────────────────────────────┘
-┌─ Funnel de conversion ───────────────────────────────────┐
-│  ████████  Envoyes   ████  Lus   ██  Reponses  █  OK/KO │
-└──────────────────────────────────────────────────────────┘
-```
+### Deux vues cote a cote
 
-**Raccourcis :** `r` = rafraichir
+| Gauche : Stats detaillees | Droite : Funnel de conversion |
+|--------------------------|------------------------------|
+| Messages envoyes: 128 | Barre: Envoyes (100%) |
+| Messages lus: 96 | Barre: Lus (75%) |
+| Reponses recues: 24 | Barre: Reponses (18.8%) |
+| Interesses: 8 | Barre: OK (6.3%) |
+| Pas interesses: 16 | Barre: KO (12.5%) |
+| Sans reponse: 32 | |
+| | Envoi -> Reponse : 18.8% |
+| | Reponse -> Interet : 33.3% |
+
+### KPIs en haut
+
+4 cartes : Total contacts | Messages envoyes | Taux de reponse | Taux d'interet
 
 ---
 
 ## 7. Settings
 
-Toutes les configurations sont stockees en base de donnees et editables depuis l'interface.
+Toutes les configurations en base de donnees, editables depuis l'interface.
+
+### Interface
+
+```mermaid
+graph LR
+    subgraph SIDEBAR["Categories"]
+        LI["linkedin"]
+        OL["ollama"]
+        OD["odoo"]
+        DG["datagouv"]
+        PR["prospection"]
+        AP["app"]
+    end
+
+    subgraph TABLE["Parametres"]
+        K1["auth_method | oauth2 | Methode auth"]
+        K2["client_id | ******* | OAuth2 ID"]
+        K3["daily_limit | 50 | Limite/jour"]
+    end
+
+    subgraph ACTIONS["Actions Ollama"]
+        T["Tester connexion"]
+        A["Auto-selection modele"]
+        M["Modeles detectes: mistral, llama3.1"]
+    end
+
+    LI -->|Selection| TABLE
+    SIDEBAR --> ACTIONS
+
+    style SIDEBAR fill:#1e293b,stroke:#64748b,color:#e2e8f0
+    style TABLE fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style ACTIONS fill:#1e293b,stroke:#22c55e,color:#e2e8f0
+```
+
+### Editer un parametre
+
+1. Selectionner une categorie dans le panneau gauche
+2. Cliquer le bouton **crayon** sur la ligne du parametre
+3. Une fenetre modale s'ouvre avec la valeur actuelle
+4. Modifier la valeur, cliquer **Sauvegarder**
+
+### Actions speciales Ollama (panneau gauche)
+
+| Bouton | Action |
+|--------|--------|
+| **Tester connexion** | Contacte Ollama et liste les modeles installes |
+| **Auto-selection modele** | Choisit le meilleur modele pour la prospection |
 
 ### Categories de settings
 
-```mermaid
-graph TD
-    S[Settings] --> LI[linkedin<br/>Auth, limites, delais]
-    S --> OL[ollama<br/>URL, modele, temperature]
-    S --> OD[odoo<br/>URL, credentials, pipeline]
-    S --> DG[datagouv<br/>Tokens API, cache]
-    S --> PR[prospection<br/>Postes, tailles, templates]
-    S --> AP[app<br/>Theme, langue, logs]
-```
-
-### Navigation Settings
-
-```
-┌─ Categories ─┐┌─ Settings [linkedin] ────────────────────────────┐
-│ > linkedin   ││ Cle                │ Valeur       │ Description  │
-│   ollama     ││ auth_method        │ oauth2       │ Methode auth │
-│   odoo       ││ client_id          │              │ OAuth2 ID    │
-│   datagouv   ││ client_secret      │ ********     │ OAuth2 Secret│
-│   prospection││ access_token       │ ********     │ Token        │
-│   app        ││ daily_limit        │ 50           │ Limite/jour  │
-└──────────────┘└──────────────────────────────────────────────────┘
-```
-
-| Touche | Action |
-|--------|--------|
-| `Left/Right` | Changer de categorie |
-| `Up/Down` | Naviguer dans les parametres |
-| `Enter` ou `e` | Editer la valeur selectionnee |
-| `Esc` | Annuler l'edition |
-| `t` | Tester la connexion Ollama |
-| `a` | Auto-selectionner le modele Ollama |
-| `r` | Rafraichir |
-
-### Settings importants
-
-#### Prospection
-
-| Cle | Valeur par defaut | Description |
-|-----|-------------------|-------------|
-| `postes_cibles` | CEO,CTO,RSSI,DSI,DG,PDG... | Postes a cibler |
-| `tranches_effectifs` | 12,21,22,31,32,41 | Codes tranches INSEE |
-| `message_template` | Bonjour {prenom}... | Template de message |
-
-#### Ollama
-
-| Cle | Valeur par defaut | Description |
-|-----|-------------------|-------------|
-| `base_url` | http://localhost:11434 | URL du serveur |
-| `model` | (auto) | Modele selectionne |
-| `auto_select` | true | Auto-selection du meilleur modele |
-| `temperature` | 0.7 | Creativite (0.0 - 1.0) |
-| `system_prompt` | Tu es un assistant commercial... | Prompt systeme |
+| Categorie | Parametres principaux |
+|-----------|----------------------|
+| **linkedin** | auth_method, client_id, client_secret, access_token, cookie_li_at, daily_limit |
+| **ollama** | base_url, model, auto_select, temperature, max_tokens, system_prompt |
+| **odoo** | enabled, url, database, username, password, pipeline_id |
+| **datagouv** | api_token, sirene_api_url, sirene_api_token, cache_duration_hours |
+| **prospection** | postes_cibles, tranches_effectifs, message_template |
+| **app** | theme, language, log_level |
 
 ---
 
 ## Workflow complet
 
-Voici le workflow type d'une campagne de prospection :
-
 ```mermaid
 flowchart TD
-    START([Demarrer MyCommercial]) --> CONFIG
+    START(["Lancer MyCommercial"]) --> CONFIG
 
-    subgraph CONFIG [1. Configuration]
-        C1[Settings > ollama > tester connexion]
-        C2[Settings > linkedin > configurer auth]
-        C3[Settings > prospection > postes cibles]
+    subgraph CONFIG ["1 - Configurer (Settings)"]
+        C1["Tester connexion Ollama"]
+        C2["Configurer LinkedIn"]
+        C3["Definir postes cibles et tranches"]
         C1 --> C2 --> C3
     end
 
     CONFIG --> SOLUTIONS
 
-    subgraph SOLUTIONS [2. Preparer les solutions]
-        S1[Solutions > 'a' ajouter solution]
-        S2[Renseigner nom + description + fichier]
-        S3[Solutions > 'g' generer resume IA]
+    subgraph SOLUTIONS ["2 - Preparer les solutions"]
+        S1["Clic + Ajouter une solution"]
+        S2["Renseigner nom, description, fichier"]
+        S3["Clic Resume IA -> Ollama genere"]
         S1 --> S2 --> S3
     end
 
     SOLUTIONS --> SEARCH
 
-    subgraph SEARCH [3. Rechercher des cibles]
-        R1[Recherche > 'e' mode Entreprises]
-        R2[Recherche > 'i' saisir criteres]
-        R3[Resultats entreprises DataGouv]
-        R4[Recherche > 'l' mode LinkedIn]
-        R5[Resultats contacts]
-        R6[Recherche > 's' sauvegarder contacts]
-        R1 --> R2 --> R3
-        R3 --> R4 --> R2
-        R2 --> R5 --> R6
+    subgraph SEARCH ["3 - Rechercher des cibles"]
+        R1["Mode Entreprises : recherche DataGouv"]
+        R2["Identifier les entreprises cibles"]
+        R3["Mode LinkedIn : rechercher les decideurs"]
+        R4["Clic Sauver sur chaque contact"]
+        R1 --> R2 --> R3 --> R4
     end
 
     SEARCH --> PROSPECT
 
-    subgraph PROSPECT [4. Prospecter]
-        P1[Contacts > selectionner]
-        P2[Contacts > 'm' generer message IA]
-        P3[Messages > verifier brouillon]
-        P4[Messages > 's' passer en Envoye]
+    subgraph PROSPECT ["4 - Prospecter"]
+        P1["Onglet Contacts : selectionner"]
+        P2["Clic Message IA -> Ollama genere"]
+        P3["Onglet Messages : verifier le brouillon"]
+        P4["Clic Statut -> Envoye"]
         P1 --> P2 --> P3 --> P4
     end
 
     PROSPECT --> FOLLOW
 
-    subgraph FOLLOW [5. Suivre]
-        F1[Messages > 's' mettre a jour statut]
-        F2[Messages > 'o' sync Odoo]
-        F3[Rapports > voir statistiques]
+    subgraph FOLLOW ["5 - Suivre et analyser"]
+        F1["Mettre a jour les statuts des messages"]
+        F2["Clic Odoo pour sync les leads"]
+        F3["Onglet Rapports : analyser le funnel"]
         F1 --> F2 --> F3
     end
 
-    FOLLOW --> ITERATE([Iterer])
+    FOLLOW --> ITERATE(["Iterer"])
     ITERATE --> SEARCH
 
-    style CONFIG fill:#e1f5fe
-    style SOLUTIONS fill:#e8f5e9
-    style SEARCH fill:#fff3e0
-    style PROSPECT fill:#fce4ec
-    style FOLLOW fill:#f3e5f5
+    style CONFIG fill:#0f172a,stroke:#3b82f6,color:#e2e8f0
+    style SOLUTIONS fill:#0f172a,stroke:#22c55e,color:#e2e8f0
+    style SEARCH fill:#0f172a,stroke:#eab308,color:#e2e8f0
+    style PROSPECT fill:#0f172a,stroke:#ef4444,color:#e2e8f0
+    style FOLLOW fill:#0f172a,stroke:#a855f7,color:#e2e8f0
 ```
 
-### Etape par etape
+### Resume en 5 etapes
 
-1. **Configurer** : Renseigner les credentials (LinkedIn, Ollama, Odoo) dans Settings
-2. **Solutions** : Ajouter vos solutions commerciales et generer les resumes IA
-3. **Rechercher** : Trouver des entreprises cibles (DataGouv) puis des contacts (LinkedIn)
-4. **Prospecter** : Generer des messages personnalises par l'IA et les envoyer
-5. **Suivre** : Mettre a jour les statuts, synchroniser avec Odoo, analyser les rapports
-
----
-
-## Raccourcis clavier
-
-### Globaux
-
-| Touche | Action |
-|--------|--------|
-| `Tab` / `Shift+Tab` | Onglet suivant / precedent |
-| `1` - `7` | Aller a l'onglet N |
-| `F1` | Aide |
-| `q` | Quitter |
-| `Ctrl+C` | Quitter immediatement |
-| `r` | Rafraichir |
-| `Esc` | Fermer popup / annuler edition |
-| `Enter` | Valider saisie / editer |
-
-### Par onglet
-
-| Onglet | Touches | Actions |
-|--------|---------|---------|
-| Recherche | `i` `/` `e` `l` `s` | Saisir, Entreprises, LinkedIn, Sauvegarder |
-| Contacts | `m` `d` `PgUp` `PgDn` | Message IA, Supprimer, Pagination |
-| Messages | `s` `o` | Cycler statut, Sync Odoo |
-| Solutions | `a` `g` | Ajouter, Resume IA |
-| Settings | `e` `t` `a` `Left` `Right` | Editer, Test Ollama, Auto-select, Categorie |
+1. **Configurer** : Settings > Ollama + LinkedIn + postes cibles
+2. **Preparer** : Ajouter vos solutions + generer les resumes IA
+3. **Rechercher** : DataGouv pour les entreprises, LinkedIn pour les contacts
+4. **Prospecter** : Generer des messages IA personnalises, marquer comme envoyes
+5. **Suivre** : Mettre a jour les statuts, sync Odoo, analyser les rapports
 
 ---
 

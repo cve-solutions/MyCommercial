@@ -18,7 +18,7 @@ Elle se connecte à LinkedIn, recherche des décideurs (CEO, CTO, RSSI) dans \
 des entreprises filtrées par taille et code APE via les données DataGouv, \
 génère des messages personnalisés avec une IA locale (Ollama), et assure \
 le suivi CRM via Odoo. Interface graphique native."""
-depends = "libc6 (>= 2.31)"
+depends = "libc6 (>= 2.31), libgl1, libegl1, libfontconfig1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, libxkbcommon0"
 section = "utils"
 priority = "optional"
 assets = [
@@ -39,6 +39,11 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 glibc = ">= 2.17"
+mesa-libGL = "*"
+mesa-libEGL = "*"
+fontconfig = "*"
+libxcb = "*"
+libxkbcommon = "*"
 
 [dependencies]
 # GUI native

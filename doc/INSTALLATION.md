@@ -19,28 +19,82 @@
 
 | Composant | Minimum | Recommande |
 |-----------|---------|------------|
-| OS | Linux (x86_64) | Ubuntu 22.04+ / Fedora 38+ / Rocky 9+ |
-| RAM | 256 Mo | 512 Mo |
-| Disque | 50 Mo | 200 Mo (avec cache entreprises) |
-| Terminal | 80x24 | 120x40 (pour un affichage optimal) |
+| OS | Linux x86_64 | Ubuntu 22.04+ / Fedora 38+ / Rocky 9+ |
+| Affichage | X11 ou Wayland | Wayland + GPU accelere |
+| RAM | 512 Mo | 1 Go |
+| Disque | 100 Mo | 500 Mo (avec cache entreprises) |
+| Resolution | 900x600 | 1280x800 ou plus |
 
-### Services optionnels
+### Architecture
 
 ```mermaid
-graph LR
-    MC[MyCommercial] --> LI[LinkedIn API]
-    MC --> OL[Ollama - IA locale]
-    MC --> OD[Odoo CRM]
-    MC --> DG[DataGouv API]
-    MC --> DB[(SQLite)]
+graph TD
+    subgraph GUI["Application MyCommercial (egui/eframe)"]
+        UI[Interface graphique native]
+        TABS[7 onglets: Dashboard, Recherche, Contacts, Messages, Solutions, Rapports, Settings]
+        ASYNC[Bus async tokio]
+    end
 
-    style MC fill:#f9f,stroke:#333,stroke-width:2px
-    style DB fill:#bbf,stroke:#333
-    style OL fill:#bfb,stroke:#333
-    style LI fill:#fbf,stroke:#333
-    style OD fill:#ffb,stroke:#333
-    style DG fill:#bff,stroke:#333
+    subgraph BACKEND["Backend Rust"]
+        DB[(SQLite embarque)]
+        SET[Settings dynamiques]
+    end
+
+    subgraph EXTERNAL["Services externes"]
+        LI[LinkedIn API]
+        OL[Ollama - IA locale]
+        OD[Odoo CRM]
+        DG[DataGouv API ouverte]
+        SIRENE[API Sirene INSEE]
+        ENT[entreprise.api.gouv.fr]
+    end
+
+    UI --> TABS
+    TABS --> ASYNC
+    ASYNC --> DB
+    ASYNC --> SET
+    ASYNC --> LI
+    ASYNC --> OL
+    ASYNC --> OD
+    ASYNC --> DG
+    ASYNC --> SIRENE
+    ASYNC --> ENT
+
+    style GUI fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#e2e8f0
+    style BACKEND fill:#1e293b,stroke:#22c55e,stroke-width:2px,color:#e2e8f0
+    style EXTERNAL fill:#1e293b,stroke:#eab308,stroke-width:2px,color:#e2e8f0
 ```
+
+### Dependances systeme (GUI native)
+
+L'application utilise **egui/eframe** avec OpenGL. Les bibliotheques graphiques suivantes sont requises :
+
+#### Debian / Ubuntu
+
+```bash
+# Compilation
+sudo apt-get install build-essential pkg-config \
+    libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libxkbcommon-dev libfontconfig1-dev libfreetype-dev \
+    libgl-dev libegl-dev libwayland-dev libxcb1-dev
+
+# Runtime
+sudo apt-get install libgl1 libegl1 libfontconfig1 \
+    libxcb-render0 libxcb-shape0 libxcb-xfixes0 libxkbcommon0
+```
+
+#### Fedora / RHEL / Rocky
+
+```bash
+# Compilation + Runtime
+sudo dnf install gcc make pkgconfig \
+    libxcb-devel libxkbcommon-devel fontconfig-devel freetype-devel \
+    mesa-libGL-devel mesa-libEGL-devel wayland-devel
+```
+
+> **Raccourci :** `./build.sh install-deps` installe tout automatiquement.
+
+### Services optionnels
 
 | Service | Obligatoire | Description |
 |---------|-------------|-------------|
@@ -57,11 +111,11 @@ graph LR
 ### Via le package .deb (Debian/Ubuntu)
 
 ```bash
-# Telecharger le package
-wget https://github.com/cve-solutions/MyCommercial/releases/latest/download/mycommercial_0.1.0-1_amd64.deb
+# Telecharger le package (inclut les dependances dans les metadonnees)
+wget https://github.com/cve-solutions/MyCommercial/releases/latest/download/mycommercial_0.2.0-1_amd64.deb
 
-# Installer
-sudo dpkg -i mycommercial_0.1.0-1_amd64.deb
+# Installer (resout les dependances automatiquement)
+sudo apt install ./mycommercial_0.2.0-1_amd64.deb
 
 # Lancer
 mycommercial
@@ -70,11 +124,11 @@ mycommercial
 ### Via le package .rpm (Fedora/RHEL/Rocky)
 
 ```bash
-# Telecharger le package
-wget https://github.com/cve-solutions/MyCommercial/releases/latest/download/mycommercial-0.1.0-1.x86_64.rpm
+# Telecharger
+wget https://github.com/cve-solutions/MyCommercial/releases/latest/download/mycommercial-0.2.0-1.x86_64.rpm
 
-# Installer
-sudo dnf install ./mycommercial-0.1.0-1.x86_64.rpm
+# Installer (resout les dependances automatiquement)
+sudo dnf install ./mycommercial-0.2.0-1.x86_64.rpm
 
 # Lancer
 mycommercial
@@ -88,30 +142,34 @@ mycommercial
 
 ```mermaid
 flowchart TD
-    A[Cloner le depot] --> B[Installer les dependances]
+    A[git clone] --> B["./build.sh install-deps"]
     B --> C{Choix du package}
-    C -->|Debian/Ubuntu| D[./build.sh deb]
-    C -->|Fedora/RHEL| E[./build.sh rpm]
-    C -->|Les deux| F[./build.sh all]
-    D --> G[dist/mycommercial_*.deb]
-    E --> H[dist/mycommercial-*.rpm]
+    C -->|Debian/Ubuntu| D["./build.sh deb"]
+    C -->|Fedora/RHEL| E["./build.sh rpm"]
+    C -->|Les deux| F["./build.sh all"]
+    D --> G["dist/mycommercial_*.deb"]
+    E --> H["dist/mycommercial-*.rpm"]
     F --> G
     F --> H
+    G --> I["sudo apt install ./dist/*.deb"]
+    H --> J["sudo dnf install ./dist/*.rpm"]
 ```
 
 ```bash
-# 1. Cloner le depot
+# 1. Cloner
 git clone https://github.com/cve-solutions/MyCommercial.git
 cd MyCommercial
 
-# 2. Installer les outils de packaging
+# 2. Installer toutes les dependances (systeme + outils packaging)
 ./build.sh install-deps
 
 # 3. Generer les packages
 ./build.sh all
 
-# 4. Les packages sont dans dist/
-ls -lh dist/
+# 4. Installer
+sudo apt install ./dist/mycommercial_*.deb     # Debian/Ubuntu
+# ou
+sudo dnf install ./dist/mycommercial-*.rpm      # Fedora/RHEL
 ```
 
 ### Commandes build.sh
@@ -122,7 +180,8 @@ ls -lh dist/
 | `./build.sh deb` | Compiler + generer .deb |
 | `./build.sh rpm` | Compiler + generer .rpm |
 | `./build.sh all` | Compiler + .deb + .rpm |
-| `./build.sh install-deps` | Installer cargo-deb et cargo-generate-rpm |
+| `./build.sh install-deps` | Installer dependances systeme + outils packaging |
+| `./build.sh check-deps` | Verifier les dependances systeme |
 | `./build.sh clean` | Nettoyer les artefacts |
 
 ---
@@ -136,46 +195,29 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
-### 2. Cloner et compiler
+### 2. Installer les dependances systeme
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install build-essential pkg-config \
+    libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libxkbcommon-dev libfontconfig1-dev libfreetype-dev \
+    libgl-dev libegl-dev libwayland-dev libxcb1-dev
+
+# Fedora/RHEL
+sudo dnf install gcc make pkgconfig \
+    libxcb-devel libxkbcommon-devel fontconfig-devel freetype-devel \
+    mesa-libGL-devel mesa-libEGL-devel wayland-devel
+```
+
+### 3. Compiler et lancer
 
 ```bash
 git clone https://github.com/cve-solutions/MyCommercial.git
 cd MyCommercial
 cargo build --release
-```
-
-### 3. Installer le binaire
-
-```bash
-# Option A : copier dans /usr/local/bin
-sudo cp target/release/mycommercial /usr/local/bin/
-
-# Option B : lancer directement
 ./target/release/mycommercial
 ```
-
-### Dependances de compilation
-
-```mermaid
-graph TD
-    R[Rust >= 1.70] --> CB[cargo build]
-    CB --> BIN[mycommercial]
-
-    subgraph "Integre - rien a installer"
-        SQ[SQLite - bundled]
-        TLS[rustls - pas d'OpenSSL]
-        CT[crossterm - pur Rust]
-    end
-
-    CB --> SQ
-    CB --> TLS
-    CB --> CT
-```
-
-Aucune bibliotheque systeme n'est requise grace a :
-- **rusqlite** avec `bundled` : SQLite compile statiquement
-- **reqwest** avec `rustls-tls` : pas besoin d'OpenSSL
-- **crossterm** / **ratatui** : pur Rust
 
 ---
 
@@ -191,16 +233,12 @@ Aucune bibliotheque systeme n'est requise grace a :
 
 ### Premier lancement
 
-Au premier lancement, MyCommercial cree automatiquement :
-1. La base de donnees SQLite
-2. Les tables necessaires
-3. Les settings par defaut
+Au premier lancement, MyCommercial :
+1. Ouvre une fenetre native 1280x800 avec theme sombre
+2. Cree automatiquement la base SQLite et les tables
+3. Initialise les settings par defaut
 
-```bash
-mycommercial
-```
-
-L'application s'ouvre sur le **Dashboard**. Allez dans l'onglet **Settings** (touche `7`) pour configurer les services.
+Allez dans l'onglet **Settings** pour configurer les services externes.
 
 ---
 
@@ -211,37 +249,31 @@ L'application s'ouvre sur le **Dashboard**. Allez dans l'onglet **Settings** (to
 ```mermaid
 sequenceDiagram
     participant U as Utilisateur
-    participant MC as MyCommercial
-    participant OL as Ollama
+    participant MC as MyCommercial (GUI)
+    participant OL as Ollama (localhost:11434)
 
-    U->>MC: Appuie sur 'g' (resume IA)
+    U->>MC: Clic "Resume IA" sur une solution
     MC->>OL: POST /api/generate
+    Note over MC: Toast "Resume IA en cours..."
     OL-->>MC: Resume genere
-    MC->>MC: Sauvegarde en BDD
-    MC-->>U: Affiche le resume
+    MC->>MC: Sauvegarde en SQLite
+    MC-->>U: Affiche le resume dans le panneau detail
 ```
 
 #### Installation d'Ollama
 
 ```bash
-# Linux
 curl -fsSL https://ollama.com/install.sh | sh
-
-# Demarrer le service
 ollama serve
-
-# Installer un modele (recommande)
-ollama pull mistral
-# ou
-ollama pull llama3.1
+ollama pull mistral     # ou llama3.1, gemma, etc.
 ```
 
 #### Configuration dans MyCommercial
 
 1. Onglet **Settings** > categorie **ollama**
 2. Verifier `base_url` = `http://localhost:11434`
-3. Appuyer sur `t` pour tester la connexion
-4. Appuyer sur `a` pour auto-selectionner le meilleur modele
+3. Cliquer **Tester connexion** dans le panneau lateral
+4. Cliquer **Auto-selection modele** pour choisir le meilleur modele installe
 
 ### LinkedIn
 
@@ -251,78 +283,52 @@ ollama pull llama3.1
 graph TD
     AUTH{Methode d'auth}
     AUTH -->|Recommande| OA[OAuth2]
-    AUTH -->|Rapide| CK[Cookie li_at]
+    AUTH -->|Rapide| CK["Cookie li_at"]
     AUTH -->|Entreprise| AK[API Key]
 
-    OA --> OA1[Client ID + Secret]
-    OA --> OA2[Redirect URI]
+    OA --> OA1["client_id + client_secret"]
+    OA --> OA2["redirect_uri"]
+    OA --> OA3["Ouvre le navigateur automatiquement"]
 
-    CK --> CK1[Extraire cookie du navigateur]
+    CK --> CK1["Extraire cookie du navigateur"]
+    CK --> CK2["Coller dans Settings"]
 
-    AK --> AK1[LinkedIn Developer Portal]
+    AK --> AK1["LinkedIn Developer Portal"]
 ```
 
-| Methode | Configuration requise | Difficulte |
-|---------|----------------------|------------|
-| OAuth2 | `client_id`, `client_secret`, `redirect_uri` | Moyenne |
-| Cookie (li_at) | `cookie_li_at` | Facile |
-| API Key | `api_key` | Facile |
+| Methode | Configuration | Difficulte |
+|---------|--------------|------------|
+| **OAuth2** | `client_id`, `client_secret`, `redirect_uri` | Moyenne |
+| **Cookie** | `cookie_li_at` | Facile |
+| **API Key** | `api_key` | Facile |
 
-#### Configuration OAuth2
-
-1. Creer une app sur [LinkedIn Developer Portal](https://www.linkedin.com/developers/)
-2. Onglet **Settings** > categorie **linkedin**
-3. Renseigner `client_id`, `client_secret`, `redirect_uri`
-4. Changer `auth_method` en `oauth2`
-
-#### Configuration Cookie
-
-1. Se connecter a LinkedIn dans le navigateur
-2. Ouvrir les DevTools > Application > Cookies
-3. Copier la valeur du cookie `li_at`
-4. Onglet **Settings** > categorie **linkedin** > `cookie_li_at`
-5. Changer `auth_method` en `cookie`
+Configuration dans **Settings > linkedin**.
 
 ### Odoo CRM
 
-```bash
-# Configuration dans Settings > odoo
-enabled    = true
-url        = https://votre-instance.odoo.com
-database   = nom_de_la_base
-username   = votre_email
-password   = votre_mot_de_passe  # ou API key
-```
+Settings > **odoo** :
+- `enabled` = `true`
+- `url` = `https://votre-instance.odoo.com`
+- `database`, `username`, `password`
 
 ### API DataGouv (Recherche Entreprises)
 
-L'API de recherche d'entreprises est **ouverte et gratuite** (pas de cle necessaire).
+L'API de recherche d'entreprises est **ouverte et gratuite** - aucune cle necessaire.
 
-Pour l'API Sirene INSEE (optionnelle, plus detaillee) :
-1. Creer un compte sur [api.insee.fr](https://api.insee.fr/)
-2. Souscrire a l'API Sirene
-3. Onglet **Settings** > categorie **datagouv** > `sirene_api_token`
+Pour l'API Sirene INSEE (optionnelle) : inscription sur [api.insee.fr](https://api.insee.fr/) puis token dans Settings > **datagouv** > `sirene_api_token`.
 
 ---
 
 ## Desinstallation
 
-### Package .deb
-
 ```bash
-sudo dpkg -r mycommercial
-```
+# Debian/Ubuntu
+sudo apt remove mycommercial
 
-### Package .rpm
-
-```bash
+# Fedora/RHEL
 sudo dnf remove mycommercial
-```
 
-### Donnees utilisateur
-
-```bash
-# Supprimer la base de donnees et les logs
+# Donnees utilisateur
 rm -rf ~/.local/share/mycommercial/
 ```
 
@@ -330,53 +336,47 @@ rm -rf ~/.local/share/mycommercial/
 
 ## Depannage
 
-### L'application ne se lance pas
+### L'application ne se lance pas (erreur graphique)
 
 ```bash
-# Verifier les logs
-cat ~/.local/share/mycommercial/mycommercial.log
+# Verifier les bibliotheques OpenGL
+glxinfo | head -5
+# Si manquant :
+sudo apt install mesa-utils libgl1    # Debian
+sudo dnf install mesa-dri-drivers     # Fedora
 
-# Lancer avec plus de logs
-RUST_LOG=debug mycommercial
+# Forcer le backend X11 (si probleme Wayland)
+WINIT_UNIX_BACKEND=x11 mycommercial
+
+# Forcer le backend Wayland
+WINIT_UNIX_BACKEND=wayland mycommercial
 ```
 
-### L'affichage est casse
+### Ecran noir ou freeze
 
 ```bash
-# Verifier la taille du terminal
-echo "Colonnes: $(tput cols) Lignes: $(tput lines)"
-# Minimum recommande : 80x24
+# Desactiver l'acceleration GPU
+LIBGL_ALWAYS_SOFTWARE=1 mycommercial
+```
 
-# Verifier le support Unicode
-echo "Test Unicode: ━━━ ● ✓ ✗"
+### Verifier les logs
+
+```bash
+cat ~/.local/share/mycommercial/mycommercial.log
+RUST_LOG=debug mycommercial
 ```
 
 ### Ollama ne repond pas
 
 ```bash
-# Verifier qu'Ollama tourne
-curl http://localhost:11434/api/tags
-
-# Redemarrer
-ollama serve
+curl http://localhost:11434/api/tags    # doit retourner du JSON
+ollama serve                            # redemarrer si besoin
 ```
 
-### Erreur SQLite
+### Verifier les dependances
 
 ```bash
-# Verifier les permissions
-ls -la ~/.local/share/mycommercial/
-
-# Reset complet (perte des donnees!)
-rm ~/.local/share/mycommercial/mycommercial.db
-```
-
-### Le package .deb ne s'installe pas
-
-```bash
-# Installer les dependances manquantes
-sudo apt-get install -f
-
-# Verifier l'architecture
-dpkg --print-architecture  # doit etre amd64
+./build.sh check-deps
+# ou manuellement :
+ldd target/release/mycommercial | grep "not found"
 ```
