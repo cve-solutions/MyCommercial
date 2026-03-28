@@ -2,15 +2,17 @@
 #
 # build.sh - Compile MyCommercial (GUI native) et generer les packages .deb et .rpm
 #
+# Verifie et installe automatiquement toutes les dependances manquantes
+# avant de compiler (systeme, cargo-deb, cargo-generate-rpm).
+#
 # Usage:
-#   ./build.sh              # Compile + .deb + .rpm
-#   ./build.sh build        # Compile uniquement (release)
-#   ./build.sh deb          # Compile + .deb uniquement
-#   ./build.sh rpm          # Compile + .rpm uniquement
-#   ./build.sh all          # Compile + .deb + .rpm
-#   ./build.sh install-deps # Installer les outils et dependances systeme
+#   ./build.sh              # Auto-install deps + Compile + .deb + .rpm
+#   ./build.sh build        # Auto-install deps + Compile uniquement
+#   ./build.sh deb          # Auto-install deps + Compile + .deb
+#   ./build.sh rpm          # Auto-install deps + Compile + .rpm
+#   ./build.sh all          # Auto-install deps + Compile + .deb + .rpm
 #   ./build.sh clean        # Nettoyer les artefacts
-#   ./build.sh check-deps   # Verifier les dependances systeme
+#   ./build.sh help         # Aide
 #
 set -euo pipefail
 
@@ -26,147 +28,187 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+ok()    { echo -e "${GREEN}[ OK ]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+error() { echo -e "${RED}[ERR ]${NC} $*" >&2; }
+step()  { echo -e "\n${BOLD}${CYAN}── $* ──${NC}"; }
 
 # ── Dependances systeme egui/eframe (OpenGL + X11/Wayland) ──
 
-# Compile-time deps (needed for cargo build)
 DEB_BUILD_DEPS=(
-    build-essential
-    pkg-config
-    dpkg-dev
-    liblzma-dev
-    # egui/eframe (glutin + winit) needs:
-    libxcb-render0-dev
-    libxcb-shape0-dev
-    libxcb-xfixes0-dev
-    libxkbcommon-dev
-    libfontconfig1-dev
-    libfreetype-dev
-    # OpenGL
-    libgl-dev
-    libegl-dev
-    # Wayland (optionnel mais recommande)
-    libwayland-dev
-    libxcb1-dev
+    build-essential pkg-config dpkg-dev liblzma-dev
+    libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+    libxkbcommon-dev libfontconfig1-dev libfreetype-dev
+    libgl-dev libegl-dev libwayland-dev libxcb1-dev
 )
-
-# Runtime deps for .deb packages
-DEB_RUNTIME_DEPS="libc6 (>= 2.31), libgl1, libegl1, libfontconfig1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, libxkbcommon0"
 
 RPM_BUILD_DEPS=(
-    gcc
-    make
-    rpm-build
-    pkgconfig
-    libxcb-devel
-    libxkbcommon-devel
-    fontconfig-devel
-    freetype-devel
-    mesa-libGL-devel
-    mesa-libEGL-devel
-    wayland-devel
+    gcc make rpm-build pkgconfig
+    libxcb-devel libxkbcommon-devel fontconfig-devel freetype-devel
+    mesa-libGL-devel mesa-libEGL-devel wayland-devel
 )
 
+DEB_RUNTIME_DEPS="libc6 (>= 2.31), libgl1, libegl1, libfontconfig1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, libxkbcommon0"
 RPM_RUNTIME_DEPS="glibc >= 2.17, mesa-libGL, mesa-libEGL, fontconfig, libxcb, libxkbcommon"
 
-# ── Verifier les prerequis ──
-check_rust() {
-    if ! command -v cargo &>/dev/null; then
-        error "Rust/Cargo non installe. Installez via:"
-        error "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-        exit 1
-    fi
-    info "Rust $(rustc --version | cut -d' ' -f2) detecte"
-}
+# ══════════════════════════════════════════════════
+# Auto-detection et installation des dependances
+# ══════════════════════════════════════════════════
 
-check_system_deps() {
-    local missing=()
-
-    if command -v dpkg &>/dev/null; then
-        info "Verification des dependances Debian/Ubuntu..."
-        for pkg in "${DEB_BUILD_DEPS[@]}"; do
-            if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
-                missing+=("$pkg")
-            fi
-        done
-    elif command -v rpm &>/dev/null; then
-        info "Verification des dependances RHEL/Fedora..."
-        for pkg in "${RPM_BUILD_DEPS[@]}"; do
-            if ! rpm -q "$pkg" &>/dev/null 2>&1; then
-                missing+=("$pkg")
-            fi
-        done
-    fi
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        warn "Dependances manquantes: ${missing[*]}"
-        warn "Lancez './build.sh install-deps' pour les installer"
-        return 1
-    else
-        ok "Toutes les dependances systeme sont presentes"
+ensure_rust() {
+    if command -v cargo &>/dev/null; then
+        ok "Rust $(rustc --version | cut -d' ' -f2) detecte"
         return 0
     fi
-}
 
-check_cargo_deb() {
-    if ! command -v cargo-deb &>/dev/null; then
-        warn "cargo-deb non installe"
-        return 1
-    fi
-    return 0
-}
+    warn "Rust/Cargo non installe. Installation automatique..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env" 2>/dev/null || true
+    export PATH="$HOME/.cargo/bin:$PATH"
 
-check_cargo_rpm() {
-    if ! command -v cargo-generate-rpm &>/dev/null; then
-        warn "cargo-generate-rpm non installe"
-        return 1
-    fi
-    return 0
-}
-
-# ── Installer les dependances ──
-install_deps() {
-    info "Installation des dependances systeme et outils de packaging..."
-    echo ""
-
-    if command -v apt-get &>/dev/null; then
-        info "Systeme Debian/Ubuntu detecte"
-        sudo apt-get update -qq
-        info "Installation des dependances de compilation (egui/OpenGL/X11/Wayland)..."
-        sudo apt-get install -y -qq "${DEB_BUILD_DEPS[@]}" 2>/dev/null || true
-        ok "Dependances systeme installees"
-    elif command -v dnf &>/dev/null; then
-        info "Systeme Fedora/RHEL detecte"
-        sudo dnf install -y "${RPM_BUILD_DEPS[@]}" 2>/dev/null || true
-        ok "Dependances systeme installees"
-    elif command -v yum &>/dev/null; then
-        info "Systeme CentOS/RHEL detecte"
-        sudo yum install -y "${RPM_BUILD_DEPS[@]}" 2>/dev/null || true
-        ok "Dependances systeme installees"
+    if command -v cargo &>/dev/null; then
+        ok "Rust $(rustc --version | cut -d' ' -f2) installe avec succes"
     else
-        warn "Gestionnaire de paquets non reconnu. Installez manuellement:"
-        warn "  OpenGL dev, X11/XCB dev, fontconfig dev, libxkbcommon dev"
+        error "Impossible d'installer Rust automatiquement."
+        error "Installez manuellement: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        exit 1
+    fi
+}
+
+detect_pkg_manager() {
+    if command -v apt-get &>/dev/null; then
+        echo "apt"
+    elif command -v dnf &>/dev/null; then
+        echo "dnf"
+    elif command -v yum &>/dev/null; then
+        echo "yum"
+    elif command -v pacman &>/dev/null; then
+        echo "pacman"
+    else
+        echo "unknown"
+    fi
+}
+
+ensure_system_deps() {
+    local pkg_mgr
+    pkg_mgr=$(detect_pkg_manager)
+    local missing=()
+
+    case "$pkg_mgr" in
+        apt)
+            for pkg in "${DEB_BUILD_DEPS[@]}"; do
+                if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
+                    missing+=("$pkg")
+                fi
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+                info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
+                sudo apt-get update -qq 2>/dev/null
+                sudo apt-get install -y -qq "${missing[@]}" 2>/dev/null
+                ok "Dependances systeme installees"
+            else
+                ok "Dependances systeme OK"
+            fi
+            ;;
+        dnf)
+            for pkg in "${RPM_BUILD_DEPS[@]}"; do
+                if ! rpm -q "$pkg" &>/dev/null 2>&1; then
+                    missing+=("$pkg")
+                fi
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+                info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
+                sudo dnf install -y "${missing[@]}" 2>/dev/null
+                ok "Dependances systeme installees"
+            else
+                ok "Dependances systeme OK"
+            fi
+            ;;
+        yum)
+            for pkg in "${RPM_BUILD_DEPS[@]}"; do
+                if ! rpm -q "$pkg" &>/dev/null 2>&1; then
+                    missing+=("$pkg")
+                fi
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+                info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
+                sudo yum install -y "${missing[@]}" 2>/dev/null
+                ok "Dependances systeme installees"
+            else
+                ok "Dependances systeme OK"
+            fi
+            ;;
+        pacman)
+            # Arch Linux equivalents
+            local ARCH_DEPS=(base-devel pkgconf libxcb libxkbcommon fontconfig freetype2 mesa wayland)
+            for pkg in "${ARCH_DEPS[@]}"; do
+                if ! pacman -Qi "$pkg" &>/dev/null 2>&1; then
+                    missing+=("$pkg")
+                fi
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+                info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
+                sudo pacman -S --noconfirm "${missing[@]}" 2>/dev/null
+                ok "Dependances systeme installees"
+            else
+                ok "Dependances systeme OK"
+            fi
+            ;;
+        *)
+            warn "Gestionnaire de paquets non reconnu."
+            warn "Assurez-vous d'avoir installe: OpenGL dev, X11/XCB dev, fontconfig dev, libxkbcommon dev"
+            ;;
+    esac
+}
+
+ensure_cargo_deb() {
+    if command -v cargo-deb &>/dev/null; then
+        ok "cargo-deb disponible"
+        return 0
     fi
 
-    echo ""
     info "Installation de cargo-deb..."
-    cargo install cargo-deb 2>/dev/null || warn "Echec installation cargo-deb"
+    if cargo install cargo-deb 2>&1 | tail -1; then
+        ok "cargo-deb installe"
+        return 0
+    else
+        warn "Echec installation cargo-deb (la generation .deb sera ignoree)"
+        return 1
+    fi
+}
+
+ensure_cargo_rpm() {
+    if command -v cargo-generate-rpm &>/dev/null; then
+        ok "cargo-generate-rpm disponible"
+        return 0
+    fi
 
     info "Installation de cargo-generate-rpm..."
-    cargo install cargo-generate-rpm 2>/dev/null || warn "Echec installation cargo-generate-rpm"
-
-    echo ""
-    ok "Installation terminee"
+    if cargo install cargo-generate-rpm 2>&1 | tail -1; then
+        ok "cargo-generate-rpm installe"
+        return 0
+    else
+        warn "Echec installation cargo-generate-rpm (la generation .rpm sera ignoree)"
+        return 1
+    fi
 }
 
-# ── Compilation ──
+# ══════════════════════════════════════════════════
+# Etapes de build
+# ══════════════════════════════════════════════════
+
+ensure_all_deps() {
+    step "Verification des prerequis"
+    ensure_rust
+    ensure_system_deps
+}
+
 build_release() {
+    step "Compilation release"
     info "Compilation en mode release (GUI native egui/eframe)..."
     cargo build --release 2>&1
 
@@ -187,16 +229,12 @@ build_release() {
     fi
 }
 
-# ── Generation .deb ──
 build_deb() {
-    if ! check_cargo_deb; then
-        warn "Installez cargo-deb: cargo install cargo-deb"
-        warn "Ou lancez: ./build.sh install-deps"
+    step "Generation du package .deb"
+    if ! ensure_cargo_deb; then
         return 1
     fi
 
-    # Mettre a jour les depends runtime dans Cargo.toml temporairement
-    # (cargo-deb lit [package.metadata.deb].depends)
     info "Generation du package .deb..."
     cargo deb --no-build 2>&1
 
@@ -223,11 +261,9 @@ build_deb() {
     fi
 }
 
-# ── Generation .rpm ──
 build_rpm() {
-    if ! check_cargo_rpm; then
-        warn "Installez cargo-generate-rpm: cargo install cargo-generate-rpm"
-        warn "Ou lancez: ./build.sh install-deps"
+    step "Generation du package .rpm"
+    if ! ensure_cargo_rpm; then
         return 1
     fi
 
@@ -253,20 +289,18 @@ build_rpm() {
     fi
 }
 
-# ── Nettoyage ──
 clean() {
-    info "Nettoyage..."
+    step "Nettoyage"
     cargo clean 2>/dev/null || true
     rm -rf "${DIST_DIR}"
     ok "Nettoyage termine"
 }
 
-# ── Resume ──
 summary() {
     echo ""
-    echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  MyCommercial v${VERSION} (GUI native) - Build termine${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  MyCommercial v${VERSION} (GUI native) - Build termine !${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
     echo ""
 
     if [ -d "${DIST_DIR}" ]; then
@@ -275,52 +309,50 @@ summary() {
     fi
 
     echo ""
-    info "Le binaire standalone est dans: ${BUILD_DIR}/${PROJECT_NAME}"
+    info "Binaire standalone: ${BUILD_DIR}/${PROJECT_NAME}"
     echo ""
-    info "Dependances runtime:"
-    info "  Debian/Ubuntu: ${DEB_RUNTIME_DEPS}"
-    info "  RHEL/Fedora:   ${RPM_RUNTIME_DEPS}"
+    info "Dependances runtime incluses dans les packages:"
+    info "  .deb: ${DEB_RUNTIME_DEPS}"
+    info "  .rpm: ${RPM_RUNTIME_DEPS}"
     echo ""
 }
 
-# ── Main ──
+# ══════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════
+
 main() {
     local cmd="${1:-all}"
 
-    echo -e "${CYAN}╔═══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  MyCommercial v${VERSION} - Build System (GUI native)   ║${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════════════════╝${NC}"
-    echo ""
-
-    check_rust
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║  MyCommercial v${VERSION} - Build System (GUI native)       ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
 
     case "${cmd}" in
         build)
+            ensure_all_deps
             build_release
             ;;
         deb)
+            ensure_all_deps
             build_release
             build_deb
             summary
             ;;
         rpm)
+            ensure_all_deps
             build_release
             build_rpm
             summary
             ;;
         all|"")
+            ensure_all_deps
             build_release
             echo ""
-            build_deb || warn "Skipping .deb (cargo-deb non disponible)"
+            build_deb || warn "Skipping .deb"
             echo ""
-            build_rpm || warn "Skipping .rpm (cargo-generate-rpm non disponible)"
+            build_rpm || warn "Skipping .rpm"
             summary
-            ;;
-        install-deps)
-            install_deps
-            ;;
-        check-deps)
-            check_system_deps
             ;;
         clean)
             clean
@@ -329,18 +361,20 @@ main() {
             echo "Usage: $0 [commande]"
             echo ""
             echo "Commandes:"
-            echo "  build        Compiler le projet en mode release"
-            echo "  deb          Compiler + generer le package .deb"
-            echo "  rpm          Compiler + generer le package .rpm"
-            echo "  all          Compiler + generer .deb et .rpm (defaut)"
-            echo "  install-deps Installer dependances systeme + outils packaging"
-            echo "  check-deps   Verifier les dependances systeme"
-            echo "  clean        Nettoyer les artefacts de build"
-            echo "  help         Afficher cette aide"
+            echo "  build   Compiler le projet en mode release"
+            echo "  deb     Compiler + generer le package .deb"
+            echo "  rpm     Compiler + generer le package .rpm"
+            echo "  all     Compiler + generer .deb et .rpm (defaut)"
+            echo "  clean   Nettoyer les artefacts de build"
+            echo "  help    Afficher cette aide"
             echo ""
-            echo "Dependances systeme requises (GUI native egui/eframe):"
-            echo "  Debian/Ubuntu: ${DEB_BUILD_DEPS[*]}"
-            echo "  RHEL/Fedora:   ${RPM_BUILD_DEPS[*]}"
+            echo "Le script verifie et installe automatiquement :"
+            echo "  - Rust/Cargo (via rustup)"
+            echo "  - Dependances systeme (OpenGL, X11, Wayland, fontconfig...)"
+            echo "  - cargo-deb (pour .deb)"
+            echo "  - cargo-generate-rpm (pour .rpm)"
+            echo ""
+            echo "Distributions supportees : Debian/Ubuntu, Fedora/RHEL/Rocky, Arch Linux"
             ;;
         *)
             error "Commande inconnue: ${cmd}"

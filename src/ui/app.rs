@@ -45,6 +45,7 @@ impl Tab {
 
 // ── Async Messages ──
 
+#[allow(dead_code)]
 pub enum AppMessage {
     EntreprisesFound(Vec<Entreprise>, u32),
     LinkedInResults(Vec<Contact>),
@@ -91,7 +92,7 @@ pub struct MyCommercialApp {
     // Contacts
     pub contacts: Vec<Contact>,
     pub contacts_page: u32,
-    pub contact_selected: Option<usize>,
+    pub _contact_selected: Option<usize>,
 
     // Messages
     pub messages: Vec<(ProspectionMessage, Contact)>,
@@ -155,7 +156,7 @@ impl MyCommercialApp {
             search_entreprises_total: 0,
             search_contacts: vec![],
             search_loading: false,
-            contacts, contacts_page: 0, contact_selected: None,
+            contacts, contacts_page: 0, _contact_selected: None,
             messages, messages_page: 0, message_selected: None,
             solutions, solution_selected: None,
             show_add_solution: false,

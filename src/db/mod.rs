@@ -448,6 +448,7 @@ pub fn update_message_odoo_lead(db: &DbPool, msg_id: i64, lead_id: i64) -> Resul
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn get_entreprises(db: &DbPool, limit: u32, offset: u32) -> Result<Vec<Entreprise>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
