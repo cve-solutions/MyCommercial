@@ -1,4 +1,5 @@
 use egui;
+use crate::db;
 use crate::ui::app::MyCommercialApp;
 use crate::ui::theme;
 
@@ -9,11 +10,13 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
     let stats = &app.stats;
 
     // ── Stats cards ──
+    let today = db::count_messages_today(&app.db).unwrap_or(0);
     ui.horizontal(|ui| {
         stat_card(ui, "Contacts", &stats.total_contacts.to_string(), theme::PRIMARY);
         stat_card(ui, "Messages envoyés", &stats.messages_envoyes.to_string(), theme::SUCCESS);
         stat_card(ui, "Intéressés", &stats.interesses.to_string(), theme::WARNING);
         stat_card(ui, "Taux réponse", &format!("{:.1}%", stats.taux_reponse), theme::INFO);
+        stat_card(ui, "Aujourd'hui", &today.to_string(), theme::WARNING);
     });
 
     ui.add_space(15.0);
@@ -83,5 +86,5 @@ fn funnel_bar(ui: &mut egui::Ui, label: &str, value: u32, max: f32, color: egui:
 
 fn status_badge(ui: &mut egui::Ui, label: &str, ok: bool) {
     let (icon, color) = if ok { ("\u{2705}", theme::SUCCESS) } else { ("\u{274c}", theme::DANGER) };
-    ui.label(egui::RichText::new(format!("{} {}", icon, label)).color(color));
+    ui.label(theme::badge(&format!("{} {}", icon, label), color));
 }
