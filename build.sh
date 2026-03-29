@@ -47,9 +47,9 @@ DEB_BUILD_DEPS=(
 )
 
 RPM_BUILD_DEPS=(
-    gcc make rpm-build pkgconfig
+    gcc make rpm-build pkgconf-pkg-config
     libxcb-devel libxkbcommon-devel fontconfig-devel freetype-devel
-    mesa-libGL-devel mesa-libEGL-devel wayland-devel
+    mesa-libGL-devel mesa-libEGL-devel wayland-devel xz-devel
 )
 
 DEB_RUNTIME_DEPS="libc6 (>= 2.31), libgl1, libegl1, libfontconfig1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, libxkbcommon0"
@@ -80,12 +80,50 @@ ensure_rust() {
 }
 
 detect_pkg_manager() {
-    if command -v apt-get &>/dev/null; then
-        echo "apt"
-    elif command -v dnf &>/dev/null; then
+    # Use /etc/os-release for reliable distro detection, fallback to command check
+    local id=""
+    local id_like=""
+    if [ -f /etc/os-release ]; then
+        id=$(. /etc/os-release && echo "${ID:-}")
+        id_like=$(. /etc/os-release && echo "${ID_LIKE:-}")
+    fi
+
+    case "$id" in
+        fedora|rhel|rocky|alma|centos)
+            if command -v dnf &>/dev/null; then echo "dnf"
+            elif command -v yum &>/dev/null; then echo "yum"
+            else echo "unknown"; fi
+            return ;;
+        ubuntu|debian|linuxmint|pop)
+            if command -v apt-get &>/dev/null; then echo "apt"; else echo "unknown"; fi
+            return ;;
+        arch|manjaro)
+            if command -v pacman &>/dev/null; then echo "pacman"; else echo "unknown"; fi
+            return ;;
+    esac
+
+    # Fallback: check ID_LIKE
+    case "$id_like" in
+        *fedora*|*rhel*)
+            if command -v dnf &>/dev/null; then echo "dnf"
+            elif command -v yum &>/dev/null; then echo "yum"
+            else echo "unknown"; fi
+            return ;;
+        *debian*|*ubuntu*)
+            if command -v apt-get &>/dev/null; then echo "apt"; else echo "unknown"; fi
+            return ;;
+        *arch*)
+            if command -v pacman &>/dev/null; then echo "pacman"; else echo "unknown"; fi
+            return ;;
+    esac
+
+    # Last resort: command existence check (dnf before apt to avoid false positive)
+    if command -v dnf &>/dev/null; then
         echo "dnf"
     elif command -v yum &>/dev/null; then
         echo "yum"
+    elif command -v apt-get &>/dev/null; then
+        echo "apt"
     elif command -v pacman &>/dev/null; then
         echo "pacman"
     else
@@ -107,8 +145,8 @@ ensure_system_deps() {
             done
             if [ ${#missing[@]} -gt 0 ]; then
                 info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
-                sudo apt-get update -qq 2>/dev/null
-                sudo apt-get install -y -qq "${missing[@]}" 2>/dev/null
+                sudo apt-get update -qq
+                sudo apt-get install -y -qq "${missing[@]}"
                 ok "Dependances systeme installees"
             else
                 ok "Dependances systeme OK"
@@ -122,7 +160,7 @@ ensure_system_deps() {
             done
             if [ ${#missing[@]} -gt 0 ]; then
                 info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
-                sudo dnf install -y "${missing[@]}" 2>/dev/null
+                sudo dnf install -y "${missing[@]}"
                 ok "Dependances systeme installees"
             else
                 ok "Dependances systeme OK"
@@ -136,7 +174,7 @@ ensure_system_deps() {
             done
             if [ ${#missing[@]} -gt 0 ]; then
                 info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
-                sudo yum install -y "${missing[@]}" 2>/dev/null
+                sudo yum install -y "${missing[@]}"
                 ok "Dependances systeme installees"
             else
                 ok "Dependances systeme OK"
@@ -152,7 +190,7 @@ ensure_system_deps() {
             done
             if [ ${#missing[@]} -gt 0 ]; then
                 info "Installation de ${#missing[@]} dependance(s) manquante(s): ${missing[*]}"
-                sudo pacman -S --noconfirm "${missing[@]}" 2>/dev/null
+                sudo pacman -S --noconfirm "${missing[@]}"
                 ok "Dependances systeme installees"
             else
                 ok "Dependances systeme OK"
