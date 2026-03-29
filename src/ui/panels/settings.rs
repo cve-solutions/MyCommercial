@@ -41,6 +41,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 ui.add_space(15.0);
                 ui.separator();
                 ui.add_space(5.0);
+
+                // ── Ollama tests ──
                 ui.label(theme::subheading("Ollama"));
                 if ui.button("\u{1f50c} Tester connexion").clicked() {
                     app.launch_ollama_models();
@@ -53,10 +55,34 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 if !app.ollama_models.is_empty() {
                     ui.add_space(5.0);
                     ui.label(theme::subheading("Modèles détectés :"));
+                    let current_model = app.settings.ollama_model();
                     for m in &app.ollama_models {
                         let size_info = m.parameter_size.as_deref().unwrap_or("");
-                        ui.label(egui::RichText::new(format!("  {} {}", m.name, size_info)).color(theme::INFO).small());
+                        let is_selected = m.name == current_model;
+                        let label = if is_selected {
+                            format!("  \u{2714} {} {}", m.name, size_info)
+                        } else {
+                            format!("    {} {}", m.name, size_info)
+                        };
+                        let color = if is_selected { theme::SUCCESS } else { theme::INFO };
+                        ui.label(egui::RichText::new(label).color(color).small());
                     }
+                }
+
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(5.0);
+
+                // ── Connection tests ──
+                ui.label(theme::subheading("Tests de connexion"));
+                if ui.button("\u{1f3db} Tester DataGouv").clicked() {
+                    app.launch_test_datagouv();
+                }
+                if ui.button("\u{1f517} Tester LinkedIn").clicked() {
+                    app.launch_test_linkedin();
+                }
+                if ui.button("\u{1f4ca} Tester Odoo").clicked() {
+                    app.launch_test_odoo();
                 }
             });
         });
@@ -70,6 +96,29 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 .unwrap_or("—");
             ui.label(theme::subheading(&format!("Paramètres : {}", cat_name)));
             ui.add_space(8.0);
+
+            // ── Font size slider for App category ──
+            if cat_name == "app" {
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("Taille des caractères").color(theme::TEXT).strong());
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("A").color(theme::TEXT_DIM).small());
+                        let slider = egui::Slider::new(&mut app.font_size, 10.0..=30.0)
+                            .step_by(1.0)
+                            .suffix(" px")
+                            .text("Taille");
+                        if ui.add(slider).changed() {
+                            let ppp = app.font_size / 14.0;
+                            ui.ctx().set_pixels_per_point(ppp);
+                            let _ = app.settings.set("app", "font_size", &format!("{}", app.font_size as u32));
+                        }
+                        ui.label(egui::RichText::new("A").color(theme::TEXT));
+                    });
+                    ui.label(egui::RichText::new(format!("Aperçu : texte à {} px", app.font_size as u32)).color(theme::INFO));
+                });
+                ui.add_space(8.0);
+            }
 
             let available = ui.available_height() - 10.0;
             egui::ScrollArea::vertical().max_height(available).show(ui, |ui| {
@@ -155,6 +204,14 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         if save {
             if let Some((cat, key, buf)) = app.editing_setting.take() {
                 let _ = app.settings.set(&cat, &key, &buf);
+                // If font_size was edited manually, apply it
+                if cat == "app" && key == "font_size" {
+                    if let Ok(size) = buf.parse::<f32>() {
+                        app.font_size = size.clamp(10.0, 30.0);
+                        let ppp = app.font_size / 14.0;
+                        ui.ctx().set_pixels_per_point(ppp);
+                    }
+                }
                 app.toast(format!("{}/{} mis à jour", cat, key), theme::SUCCESS);
                 app.refresh_settings_items();
             }

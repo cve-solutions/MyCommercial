@@ -145,6 +145,7 @@ fn seed_default_settings(conn: &Connection) -> Result<()> {
         ("prospection", "message_template", "Bonjour {prenom},\n\nJe me permets de vous contacter car {solution_resume}\n\nSeriez-vous disponible pour un échange rapide ?\n\nCordialement", "Template de message par défaut", "text"),
 
         // Application
+        ("app", "font_size", "14", "Taille des caractères (10-30)", "number"),
         ("app", "theme", "dark", "Thème de l'interface (dark/light)", "select"),
         ("app", "language", "fr", "Langue de l'application", "select"),
         ("app", "log_level", "info", "Niveau de log", "select"),

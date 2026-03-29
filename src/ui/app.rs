@@ -55,6 +55,7 @@ pub enum AppMessage {
     MessageGenerated { contact_id: i64, message: String },
     LinkedInMessageSent,
     OdooLeadCreated { message_id: i64, lead_id: i64 },
+    ConnectionTestResult { service: String, success: bool, message: String },
     Error(String),
     Info(String),
 }
@@ -116,6 +117,9 @@ pub struct MyCommercialApp {
     pub settings_items: Vec<(String, String, String, String)>,
     pub editing_setting: Option<(String, String, String)>, // (cat, key, buffer)
 
+    // Font size
+    pub font_size: f32,
+
     // Modal
     pub modal_error: Option<String>,
     pub modal_info: Option<String>,
@@ -129,10 +133,15 @@ pub enum SearchMode {
 
 impl MyCommercialApp {
     pub fn new(cc: &eframe::CreationContext<'_>, db: DbPool, runtime: tokio::runtime::Runtime) -> Self {
-        theme::setup_visuals(&cc.egui_ctx);
-
         let (tx, rx) = mpsc::unbounded_channel();
         let settings = SettingsManager::new(db.clone());
+
+        // Apply font size from settings
+        let font_size = settings.get_f64("app", "font_size", 14.0) as f32;
+        let ppp = font_size / 14.0; // 14px = 1.0 scale
+        cc.egui_ctx.set_pixels_per_point(ppp);
+
+        theme::setup_visuals(&cc.egui_ctx);
         let stats = db::get_rapport_stats(&db).unwrap_or_default();
         let contacts = db::get_contacts(&db, 100, 0).unwrap_or_default();
         let messages = db::get_messages(&db, 100, 0).unwrap_or_default();
@@ -168,6 +177,7 @@ impl MyCommercialApp {
             settings_selected_cat: 0,
             settings_items: items,
             editing_setting: None,
+            font_size,
             modal_error: None,
             modal_info: None,
         }
@@ -214,8 +224,10 @@ impl MyCommercialApp {
                 }
                 AppMessage::OllamaModelSelected(n) => {
                     let _ = self.settings.set("ollama", "model", &n);
-                    self.toast(format!("Modèle sélectionné: {}", n), theme::SUCCESS);
+                    self.toast(format!("Modèle auto-sélectionné: {}", n), theme::SUCCESS);
                     self.refresh_settings_items();
+                    // Also refresh models list
+                    self.launch_ollama_models();
                 }
                 AppMessage::AiSummaryReady { solution_id, summary } => {
                     let _ = db::update_solution_summary(&self.db, solution_id, &summary);
@@ -239,6 +251,13 @@ impl MyCommercialApp {
                     let _ = db::update_message_odoo_lead(&self.db, message_id, lead_id);
                     self.toast(format!("Lead Odoo #{} créé", lead_id), theme::SUCCESS);
                     self.refresh_data();
+                }
+                AppMessage::ConnectionTestResult { service, success, message } => {
+                    if success {
+                        self.toast(format!("{}: {}", service, message), theme::SUCCESS);
+                    } else {
+                        self.toast(format!("{}: {}", service, message), theme::DANGER);
+                    }
                 }
                 AppMessage::Error(e) => {
                     self.search_loading = false;
@@ -343,6 +362,105 @@ impl MyCommercialApp {
                 contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl).await {
                 Ok(m) => { let _ = tx.send(AppMessage::MessageGenerated { contact_id: cid, message: m }); }
                 Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+            }
+        });
+    }
+
+    pub fn launch_test_datagouv(&mut self) {
+        let tx = self.tx.clone();
+        let s = SettingsManager::new(self.db.clone());
+        let db = self.db.clone();
+        self.runtime_handle.spawn(async move {
+            let c = DataGouvClient::new(&s, db);
+            match c.search_open("test", None, None, None, 1, 1).await {
+                Ok((_, total)) => {
+                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                        service: "DataGouv".into(),
+                        success: true,
+                        message: format!("Connexion OK ({} résultats)", total),
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                        service: "DataGouv".into(),
+                        success: false,
+                        message: format!("Erreur: {}", e),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn launch_test_linkedin(&mut self) {
+        let tx = self.tx.clone();
+        let s = SettingsManager::new(self.db.clone());
+        self.runtime_handle.spawn(async move {
+            match LinkedInClient::new(&s) {
+                Ok(client) => {
+                    if !client.is_authenticated() {
+                        let _ = tx.send(AppMessage::ConnectionTestResult {
+                            service: "LinkedIn".into(),
+                            success: false,
+                            message: "Non authentifié. Configurez vos identifiants.".into(),
+                        });
+                        return;
+                    }
+                    match client.search_people("test", "CEO", None, 0, 1).await {
+                        Ok(_) => {
+                            let _ = tx.send(AppMessage::ConnectionTestResult {
+                                service: "LinkedIn".into(),
+                                success: true,
+                                message: "Connexion OK".into(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppMessage::ConnectionTestResult {
+                                service: "LinkedIn".into(),
+                                success: false,
+                                message: format!("Erreur API: {}", e),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                        service: "LinkedIn".into(),
+                        success: false,
+                        message: format!("Erreur: {}", e),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn launch_test_odoo(&mut self) {
+        let tx = self.tx.clone();
+        let s = SettingsManager::new(self.db.clone());
+        self.runtime_handle.spawn(async move {
+            let mut c = OdooClient::new(&s);
+            if !c.is_enabled() {
+                let _ = tx.send(AppMessage::ConnectionTestResult {
+                    service: "Odoo".into(),
+                    success: false,
+                    message: "Intégration désactivée. Activez-la dans les paramètres.".into(),
+                });
+                return;
+            }
+            match c.authenticate().await {
+                Ok(()) => {
+                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                        service: "Odoo".into(),
+                        success: true,
+                        message: "Connexion et authentification OK".into(),
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                        service: "Odoo".into(),
+                        success: false,
+                        message: format!("Erreur: {}", e),
+                    });
+                }
             }
         });
     }
