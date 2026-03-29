@@ -205,7 +205,19 @@ pub fn get_settings_by_category(db: &DbPool, category: &str) -> Result<Vec<(Stri
 
 pub fn get_all_categories(db: &DbPool) -> Result<Vec<String>> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT DISTINCT category FROM settings ORDER BY category")?;
+    // Ordre logique plutôt qu'alphabétique
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT category FROM settings ORDER BY
+         CASE category
+            WHEN 'linkedin' THEN 1
+            WHEN 'ollama' THEN 2
+            WHEN 'odoo' THEN 3
+            WHEN 'datagouv' THEN 4
+            WHEN 'prospection' THEN 5
+            WHEN 'app' THEN 6
+            ELSE 7
+         END"
+    )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut results = Vec::new();
     for row in rows {

@@ -7,118 +7,122 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
     ui.add_space(8.0);
 
     ui.horizontal(|ui| {
-        // ── Left: categories ──
+        // ── Left: categories (scrollable) ──
         ui.vertical(|ui| {
-            ui.set_min_width(160.0);
-            ui.set_max_width(180.0);
-            ui.group(|ui| {
-                ui.label(theme::subheading("Catégories"));
-                ui.add_space(5.0);
-                let cats = app.settings_categories.clone();
-                for (i, cat) in cats.iter().enumerate() {
-                    let selected = i == app.settings_selected_cat;
-                    let icon = match cat.as_str() {
-                        "linkedin" => "\u{1f517}",
-                        "ollama" => "\u{1f916}",
-                        "odoo" => "\u{1f4ca}",
-                        "datagouv" => "\u{1f3db}",
-                        "prospection" => "\u{1f4e8}",
-                        "app" => "\u{2699}\u{fe0f}",
-                        _ => "\u{1f4c1}",
-                    };
-                    let text = format!("{} {}", icon, cat);
-                    let rt = if selected {
-                        egui::RichText::new(text).color(theme::PRIMARY).strong()
-                    } else {
-                        egui::RichText::new(text).color(theme::TEXT)
-                    };
-                    if ui.selectable_label(selected, rt).clicked() {
-                        app.settings_selected_cat = i;
-                        app.refresh_settings_items();
-                    }
-                }
-
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(5.0);
-
-                // ── LinkedIn OAuth2 ──
-                ui.label(theme::subheading("LinkedIn"));
-                if app.linkedin_oauth_in_progress {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(egui::RichText::new("Connexion en cours...").color(theme::WARNING).small());
-                    });
-                } else {
-                    let has_token = !app.settings.get_or_default("linkedin", "access_token", "").is_empty();
-                    if has_token {
-                        ui.label(egui::RichText::new("\u{2714} Connecté (OAuth2)").color(theme::SUCCESS).small());
-                    }
-                    if ui.button("\u{1f517} Se connecter (OAuth2)").clicked() {
-                        app.launch_linkedin_oauth2();
-                    }
-                }
-
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(5.0);
-
-                // ── Ollama tests ──
-                ui.label(theme::subheading("Ollama"));
-                if ui.button("\u{1f50c} Tester connexion").clicked() {
-                    app.launch_ollama_models();
-                }
-                if ui.button("\u{1f916} Auto-sélection modèle").clicked() {
-                    app.launch_ollama_auto_select();
-                }
-
-                // Show detected models
-                if !app.ollama_models.is_empty() {
+            ui.set_min_width(180.0);
+            ui.set_max_width(200.0);
+            let sidebar_height = ui.available_height();
+            egui::ScrollArea::vertical()
+                .max_height(sidebar_height)
+                .show(ui, |ui| {
+                ui.group(|ui| {
+                    ui.label(theme::subheading("Catégories"));
                     ui.add_space(5.0);
-                    ui.label(theme::subheading("Modèles détectés :"));
-                    let current_model = app.settings.ollama_model();
-                    for m in &app.ollama_models {
-                        let size_info = m.parameter_size.as_deref().unwrap_or("");
-                        let is_selected = m.name == current_model;
-                        let label = if is_selected {
-                            format!("  \u{2714} {} {}", m.name, size_info)
-                        } else {
-                            format!("    {} {}", m.name, size_info)
+                    let cats = app.settings_categories.clone();
+                    for (i, cat) in cats.iter().enumerate() {
+                        let selected = i == app.settings_selected_cat;
+                        let icon = match cat.as_str() {
+                            "linkedin" => "\u{1f517}",
+                            "ollama" => "\u{1f916}",
+                            "odoo" => "\u{1f4ca}",
+                            "datagouv" => "\u{1f3db}",
+                            "prospection" => "\u{1f4e8}",
+                            "app" => "\u{2699}\u{fe0f}",
+                            _ => "\u{1f4c1}",
                         };
-                        let color = if is_selected { theme::SUCCESS } else { theme::INFO };
-                        ui.label(egui::RichText::new(label).color(color).small());
+                        let text = format!("{} {}", icon, cat);
+                        let rt = if selected {
+                            egui::RichText::new(text).color(theme::PRIMARY).strong()
+                        } else {
+                            egui::RichText::new(text).color(theme::TEXT)
+                        };
+                        if ui.selectable_label(selected, rt).clicked() {
+                            app.settings_selected_cat = i;
+                            app.refresh_settings_items();
+                        }
                     }
-                }
 
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(5.0);
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(5.0);
 
-                // ── Connection tests ──
-                ui.label(theme::subheading("Tests de connexion"));
-                if ui.button("\u{1f3db} Tester DataGouv").clicked() {
-                    app.launch_test_datagouv();
-                }
-                if ui.button("\u{1f517} Tester LinkedIn").clicked() {
-                    app.launch_test_linkedin();
-                }
-                if ui.button("\u{1f4ca} Tester Odoo").clicked() {
-                    app.launch_test_odoo();
-                }
+                    // ── LinkedIn OAuth2 ──
+                    ui.label(theme::subheading("LinkedIn"));
+                    if app.linkedin_oauth_in_progress {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(egui::RichText::new("Connexion...").color(theme::WARNING).small());
+                        });
+                    } else {
+                        let has_token = !app.settings.get_or_default("linkedin", "access_token", "").is_empty();
+                        if has_token {
+                            ui.label(egui::RichText::new("\u{2714} Connecté").color(theme::SUCCESS).small());
+                        }
+                        if ui.button("\u{1f517} Se connecter (OAuth2)").clicked() {
+                            app.launch_linkedin_oauth2();
+                        }
+                    }
 
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(5.0);
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(5.0);
 
-                // ── Debug logs toggle ──
-                let debug_label = if app.show_debug_logs {
-                    "\u{1f41e} Masquer logs"
-                } else {
-                    "\u{1f41e} Afficher logs"
-                };
-                if ui.button(debug_label).clicked() {
-                    app.show_debug_logs = !app.show_debug_logs;
-                }
+                    // ── Ollama ──
+                    ui.label(theme::subheading("Ollama"));
+                    if ui.button("\u{1f50c} Tester connexion").clicked() {
+                        app.launch_ollama_models();
+                    }
+                    if ui.button("\u{1f916} Auto-sélection").clicked() {
+                        app.launch_ollama_auto_select();
+                    }
+
+                    // Show detected models
+                    if !app.ollama_models.is_empty() {
+                        ui.add_space(3.0);
+                        let current_model = app.settings.ollama_model();
+                        for m in &app.ollama_models {
+                            let size_info = m.parameter_size.as_deref().unwrap_or("");
+                            let is_selected = m.name == current_model;
+                            let label = if is_selected {
+                                format!("\u{2714} {} {}", m.name, size_info)
+                            } else {
+                                format!("  {} {}", m.name, size_info)
+                            };
+                            let color = if is_selected { theme::SUCCESS } else { theme::INFO };
+                            ui.label(egui::RichText::new(label).color(color).small());
+                        }
+                    }
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+
+                    // ── Connection tests ──
+                    ui.label(theme::subheading("Tests connexion"));
+                    if ui.button("\u{1f3db} Tester DataGouv").clicked() {
+                        app.launch_test_datagouv();
+                    }
+                    if ui.button("\u{1f517} Tester LinkedIn").clicked() {
+                        app.launch_test_linkedin();
+                    }
+                    if ui.button("\u{1f4ca} Tester Odoo").clicked() {
+                        app.launch_test_odoo();
+                    }
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+
+                    // ── Debug logs toggle ──
+                    let debug_label = if app.show_debug_logs {
+                        "\u{1f41e} Masquer logs"
+                    } else {
+                        "\u{1f41e} Afficher logs"
+                    };
+                    if ui.button(debug_label).clicked() {
+                        app.show_debug_logs = !app.show_debug_logs;
+                    }
+                });
             });
         });
 
@@ -239,7 +243,6 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         if save {
             if let Some((cat, key, buf)) = app.editing_setting.take() {
                 let _ = app.settings.set(&cat, &key, &buf);
-                // If font_size was edited manually, apply it
                 if cat == "app" && key == "font_size" {
                     if let Ok(size) = buf.parse::<f32>() {
                         app.font_size = size.clamp(10.0, 30.0);
