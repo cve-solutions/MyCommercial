@@ -84,6 +84,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 if ui.button("\u{1f4ca} Tester Odoo").clicked() {
                     app.launch_test_odoo();
                 }
+
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(5.0);
+
+                // ── Debug logs toggle ──
+                let debug_label = if app.show_debug_logs {
+                    "\u{1f41e} Masquer logs"
+                } else {
+                    "\u{1f41e} Afficher logs"
+                };
+                if ui.button(debug_label).clicked() {
+                    app.show_debug_logs = !app.show_debug_logs;
+                }
             });
         });
 

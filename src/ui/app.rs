@@ -68,6 +68,42 @@ pub struct Toast {
     pub expires: std::time::Instant,
 }
 
+// ── Debug log entry ──
+
+pub struct DebugLogEntry {
+    pub timestamp: String,
+    pub level: DebugLevel,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum DebugLevel {
+    Info,
+    Success,
+    Error,
+    Debug,
+}
+
+impl DebugLevel {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Info => "INFO",
+            Self::Success => " OK ",
+            Self::Error => "ERR ",
+            Self::Debug => "DBG ",
+        }
+    }
+
+    pub fn color(&self) -> egui::Color32 {
+        match self {
+            Self::Info => theme::INFO,
+            Self::Success => theme::SUCCESS,
+            Self::Error => theme::DANGER,
+            Self::Debug => theme::MUTED,
+        }
+    }
+}
+
 // ── App State ──
 
 pub struct MyCommercialApp {
@@ -77,6 +113,7 @@ pub struct MyCommercialApp {
     pub tx: mpsc::UnboundedSender<AppMessage>,
     rx: mpsc::UnboundedReceiver<AppMessage>,
     pub runtime_handle: tokio::runtime::Handle,
+    pub egui_ctx: egui::Context,
     pub toasts: Vec<Toast>,
 
     // Dashboard
@@ -120,6 +157,10 @@ pub struct MyCommercialApp {
     // Font size
     pub font_size: f32,
 
+    // Debug logs
+    pub debug_logs: Vec<DebugLogEntry>,
+    pub show_debug_logs: bool,
+
     // Modal
     pub modal_error: Option<String>,
     pub modal_info: Option<String>,
@@ -156,6 +197,7 @@ impl MyCommercialApp {
         Self {
             db, settings, tx, rx,
             runtime_handle: runtime.handle().clone(),
+            egui_ctx: cc.egui_ctx.clone(),
             tab: Tab::Dashboard,
             toasts: vec![],
             stats,
@@ -178,6 +220,8 @@ impl MyCommercialApp {
             settings_items: items,
             editing_setting: None,
             font_size,
+            debug_logs: vec![],
+            show_debug_logs: false,
             modal_error: None,
             modal_info: None,
         }
@@ -204,6 +248,26 @@ impl MyCommercialApp {
         });
     }
 
+    pub fn log_debug(&mut self, level: DebugLevel, msg: impl Into<String>) {
+        let now = chrono::Local::now();
+        self.debug_logs.push(DebugLogEntry {
+            timestamp: now.format("%H:%M:%S").to_string(),
+            level,
+            message: msg.into(),
+        });
+        // Keep last 200 entries
+        if self.debug_logs.len() > 200 {
+            self.debug_logs.remove(0);
+        }
+        tracing::debug!("{}", self.debug_logs.last().unwrap().message);
+    }
+
+    /// Helper: send a message and trigger repaint
+    fn send_msg(tx: &mpsc::UnboundedSender<AppMessage>, ctx: &egui::Context, msg: AppMessage) {
+        let _ = tx.send(msg);
+        ctx.request_repaint();
+    }
+
     fn process_messages(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
@@ -219,14 +283,23 @@ impl MyCommercialApp {
                     self.search_contacts = c;
                 }
                 AppMessage::OllamaModels(m) => {
+                    self.log_debug(DebugLevel::Info, format!("Ollama: {} modèle(s) détecté(s)", m.len()));
+                    for model in &m {
+                        self.log_debug(DebugLevel::Debug, format!(
+                            "  - {} ({}, {})",
+                            model.name,
+                            model.parameter_size.as_deref().unwrap_or("?"),
+                            model.family.as_deref().unwrap_or("?"),
+                        ));
+                    }
                     self.toast(format!("Ollama: {} modèle(s) disponible(s)", m.len()), theme::INFO);
                     self.ollama_models = m;
                 }
                 AppMessage::OllamaModelSelected(n) => {
                     let _ = self.settings.set("ollama", "model", &n);
+                    self.log_debug(DebugLevel::Success, format!("Ollama: modèle auto-sélectionné = {}", n));
                     self.toast(format!("Modèle auto-sélectionné: {}", n), theme::SUCCESS);
                     self.refresh_settings_items();
-                    // Also refresh models list
                     self.launch_ollama_models();
                 }
                 AppMessage::AiSummaryReady { solution_id, summary } => {
@@ -253,6 +326,8 @@ impl MyCommercialApp {
                     self.refresh_data();
                 }
                 AppMessage::ConnectionTestResult { service, success, message } => {
+                    let level = if success { DebugLevel::Success } else { DebugLevel::Error };
+                    self.log_debug(level, format!("[TEST] {}: {}", service, message));
                     if success {
                         self.toast(format!("{}: {}", service, message), theme::SUCCESS);
                     } else {
@@ -261,9 +336,11 @@ impl MyCommercialApp {
                 }
                 AppMessage::Error(e) => {
                     self.search_loading = false;
+                    self.log_debug(DebugLevel::Error, format!("ERREUR: {}", e));
                     self.modal_error = Some(e);
                 }
                 AppMessage::Info(i) => {
+                    self.log_debug(DebugLevel::Info, i.clone());
                     self.modal_info = Some(i);
                 }
             }
@@ -276,14 +353,15 @@ impl MyCommercialApp {
         if self.search_query.is_empty() { return; }
         self.search_loading = true;
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let q = self.search_query.clone();
         let db = self.db.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let c = DataGouvClient::new(&s, db);
             match c.search_open(&q, None, None, None, 1, 25).await {
-                Ok((e, t)) => { let _ = tx.send(AppMessage::EntreprisesFound(e, t)); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Ok((e, t)) => Self::send_msg(&tx, &ctx, AppMessage::EntreprisesFound(e, t)),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
@@ -292,6 +370,7 @@ impl MyCommercialApp {
         if self.search_query.is_empty() { return; }
         self.search_loading = true;
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let q = self.search_query.clone();
         let s = SettingsManager::new(self.db.clone());
         let postes = self.settings.postes_cibles();
@@ -299,40 +378,44 @@ impl MyCommercialApp {
             match LinkedInClient::new(&s) {
                 Ok(client) => {
                     if !client.is_authenticated() {
-                        let _ = tx.send(AppMessage::Error("LinkedIn non connecté. Configurez dans Settings.".into()));
+                        Self::send_msg(&tx, &ctx, AppMessage::Error("LinkedIn non connecté. Configurez dans Settings.".into()));
                         return;
                     }
                     let title = postes.first().map(|s| s.as_str()).unwrap_or("CEO");
                     match client.search_people(&q, title, None, 0, 25).await {
-                        Ok(c) => { let _ = tx.send(AppMessage::LinkedInResults(c)); }
-                        Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                        Ok(c) => Self::send_msg(&tx, &ctx, AppMessage::LinkedInResults(c)),
+                        Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
                     }
                 }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
 
     pub fn launch_ollama_models(&mut self) {
+        self.log_debug(DebugLevel::Debug, "Ollama: récupération des modèles...");
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let c = OllamaClient::new(&s);
             match c.list_models().await {
-                Ok(m) => { let _ = tx.send(AppMessage::OllamaModels(m)); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("Ollama: {}", e))); }
+                Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::OllamaModels(m)),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Ollama: {}", e))),
             }
         });
     }
 
     pub fn launch_ollama_auto_select(&mut self) {
+        self.log_debug(DebugLevel::Debug, "Ollama: auto-sélection du modèle...");
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let mut c = OllamaClient::new(&s);
             match c.auto_select_model().await {
-                Ok(n) => { let _ = tx.send(AppMessage::OllamaModelSelected(n)); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Ok(n) => Self::send_msg(&tx, &ctx, AppMessage::OllamaModelSelected(n)),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
@@ -340,12 +423,13 @@ impl MyCommercialApp {
     pub fn launch_ai_summary(&mut self, sol_id: i64, content: String) {
         self.toast("Résumé IA en cours...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let c = OllamaClient::new(&s);
             match c.summarize_solution(&content).await {
-                Ok(sum) => { let _ = tx.send(AppMessage::AiSummaryReady { solution_id: sol_id, summary: sum }); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Ok(sum) => Self::send_msg(&tx, &ctx, AppMessage::AiSummaryReady { solution_id: sol_id, summary: sum }),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
@@ -353,6 +437,7 @@ impl MyCommercialApp {
     pub fn launch_generate_message(&mut self, contact: Contact, resume: String) {
         self.toast("Génération message IA...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         let tmpl = self.settings.message_template();
         self.runtime_handle.spawn(async move {
@@ -360,28 +445,31 @@ impl MyCommercialApp {
             let cid = contact.id.unwrap_or(0);
             match c.generate_prospection_message(&contact.prenom, &contact.poste,
                 contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl).await {
-                Ok(m) => { let _ = tx.send(AppMessage::MessageGenerated { contact_id: cid, message: m }); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::MessageGenerated { contact_id: cid, message: m }),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
 
     pub fn launch_test_datagouv(&mut self) {
+        self.log_debug(DebugLevel::Debug, "[TEST] DataGouv: connexion à recherche-entreprises.api.gouv.fr...");
+        self.toast("Test DataGouv en cours...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         let db = self.db.clone();
         self.runtime_handle.spawn(async move {
             let c = DataGouvClient::new(&s, db);
             match c.search_open("test", None, None, None, 1, 1).await {
                 Ok((_, total)) => {
-                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                    Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                         service: "DataGouv".into(),
                         success: true,
-                        message: format!("Connexion OK ({} résultats)", total),
+                        message: format!("Connexion OK ({} résultats trouvés)", total),
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                    Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                         service: "DataGouv".into(),
                         success: false,
                         message: format!("Erreur: {}", e),
@@ -392,41 +480,44 @@ impl MyCommercialApp {
     }
 
     pub fn launch_test_linkedin(&mut self) {
+        self.log_debug(DebugLevel::Debug, "[TEST] LinkedIn: vérification authentification...");
+        self.toast("Test LinkedIn en cours...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             match LinkedInClient::new(&s) {
                 Ok(client) => {
                     if !client.is_authenticated() {
-                        let _ = tx.send(AppMessage::ConnectionTestResult {
+                        Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                             service: "LinkedIn".into(),
                             success: false,
-                            message: "Non authentifié. Configurez vos identifiants.".into(),
+                            message: "Non authentifié. Configurez vos identifiants dans Settings > LinkedIn.".into(),
                         });
                         return;
                     }
                     match client.search_people("test", "CEO", None, 0, 1).await {
                         Ok(_) => {
-                            let _ = tx.send(AppMessage::ConnectionTestResult {
+                            Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                                 service: "LinkedIn".into(),
                                 success: true,
-                                message: "Connexion OK".into(),
+                                message: "Connexion et authentification OK".into(),
                             });
                         }
                         Err(e) => {
-                            let _ = tx.send(AppMessage::ConnectionTestResult {
+                            Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                                 service: "LinkedIn".into(),
                                 success: false,
-                                message: format!("Erreur API: {}", e),
+                                message: format!("Authentifié mais erreur API: {}", e),
                             });
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                    Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                         service: "LinkedIn".into(),
                         success: false,
-                        message: format!("Erreur: {}", e),
+                        message: format!("Erreur initialisation: {}", e),
                     });
                 }
             }
@@ -434,28 +525,31 @@ impl MyCommercialApp {
     }
 
     pub fn launch_test_odoo(&mut self) {
+        self.log_debug(DebugLevel::Debug, "[TEST] Odoo: test connexion JSON-RPC...");
+        self.toast("Test Odoo en cours...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let mut c = OdooClient::new(&s);
             if !c.is_enabled() {
-                let _ = tx.send(AppMessage::ConnectionTestResult {
+                Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                     service: "Odoo".into(),
                     success: false,
-                    message: "Intégration désactivée. Activez-la dans les paramètres.".into(),
+                    message: "Intégration désactivée. Activez 'enabled=true' dans Settings > Odoo.".into(),
                 });
                 return;
             }
             match c.authenticate().await {
                 Ok(()) => {
-                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                    Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                         service: "Odoo".into(),
                         success: true,
-                        message: "Connexion et authentification OK".into(),
+                        message: "Connexion et authentification JSON-RPC OK".into(),
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::ConnectionTestResult {
+                    Self::send_msg(&tx, &ctx, AppMessage::ConnectionTestResult {
                         service: "Odoo".into(),
                         success: false,
                         message: format!("Erreur: {}", e),
@@ -468,14 +562,15 @@ impl MyCommercialApp {
     pub fn launch_odoo_sync(&mut self, contact: Contact, msg_content: String, msg_id: i64, sol_name: String) {
         self.toast("Synchronisation Odoo...", theme::INFO);
         let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         self.runtime_handle.spawn(async move {
             let mut c = OdooClient::new(&s);
-            if !c.is_enabled() { let _ = tx.send(AppMessage::Error("Odoo désactivé".into())); return; }
-            if let Err(e) = c.authenticate().await { let _ = tx.send(AppMessage::Error(format!("{}", e))); return; }
+            if !c.is_enabled() { Self::send_msg(&tx, &ctx, AppMessage::Error("Odoo désactivé".into())); return; }
+            if let Err(e) = c.authenticate().await { Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))); return; }
             match c.create_lead(&contact, &sol_name, &msg_content).await {
-                Ok(lid) => { let _ = tx.send(AppMessage::OdooLeadCreated { message_id: msg_id, lead_id: lid }); }
-                Err(e) => { let _ = tx.send(AppMessage::Error(format!("{}", e))); }
+                Ok(lid) => Self::send_msg(&tx, &ctx, AppMessage::OdooLeadCreated { message_id: msg_id, lead_id: lid }),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });
     }
@@ -544,6 +639,38 @@ impl eframe::App for MyCommercialApp {
                 Tab::Settings => panels::settings::show(ui, self),
             }
         });
+
+        // ── Debug log window ──
+        if self.show_debug_logs {
+            let mut open = self.show_debug_logs;
+            egui::Window::new("\u{1f41e} Logs Debug")
+                .open(&mut open)
+                .resizable(true)
+                .default_size([600.0, 300.0])
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -40.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("\u{1f5d1} Effacer").clicked() {
+                            self.debug_logs.clear();
+                        }
+                        ui.label(egui::RichText::new(format!("{} entrées", self.debug_logs.len())).color(theme::TEXT_DIM));
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .max_height(250.0)
+                        .show(ui, |ui| {
+                            for entry in &self.debug_logs {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&entry.timestamp).monospace().color(theme::TEXT_DIM));
+                                    ui.label(egui::RichText::new(entry.level.label()).monospace().color(entry.level.color()));
+                                    ui.label(egui::RichText::new(&entry.message).color(theme::TEXT));
+                                });
+                            }
+                        });
+                });
+            self.show_debug_logs = open;
+        }
 
         // ── Modals ──
         if let Some(ref err) = self.modal_error.clone() {
