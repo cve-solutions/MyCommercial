@@ -24,5 +24,4 @@ target
 # Added by cargo
 /target
 
-# Build artifacts
-/dist
+# Build artifacts (keep dist/ tracked for pre-built binaries)
