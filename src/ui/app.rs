@@ -112,6 +112,7 @@ pub struct MyCommercialApp {
     pub tab: Tab,
     pub tx: mpsc::UnboundedSender<AppMessage>,
     rx: mpsc::UnboundedReceiver<AppMessage>,
+    _runtime: tokio::runtime::Runtime,
     pub runtime_handle: tokio::runtime::Handle,
     pub egui_ctx: egui::Context,
     pub toasts: Vec<Toast>,
@@ -194,9 +195,12 @@ impl MyCommercialApp {
             vec![]
         };
 
+        let runtime_handle = runtime.handle().clone();
+
         Self {
             db, settings, tx, rx,
-            runtime_handle: runtime.handle().clone(),
+            _runtime: runtime,
+            runtime_handle,
             egui_ctx: cc.egui_ctx.clone(),
             tab: Tab::Dashboard,
             toasts: vec![],
