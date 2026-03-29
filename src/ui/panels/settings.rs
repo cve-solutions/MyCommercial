@@ -42,6 +42,27 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 ui.separator();
                 ui.add_space(5.0);
 
+                // ── LinkedIn OAuth2 ──
+                ui.label(theme::subheading("LinkedIn"));
+                if app.linkedin_oauth_in_progress {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Connexion en cours...").color(theme::WARNING).small());
+                    });
+                } else {
+                    let has_token = !app.settings.get_or_default("linkedin", "access_token", "").is_empty();
+                    if has_token {
+                        ui.label(egui::RichText::new("\u{2714} Connecté (OAuth2)").color(theme::SUCCESS).small());
+                    }
+                    if ui.button("\u{1f517} Se connecter (OAuth2)").clicked() {
+                        app.launch_linkedin_oauth2();
+                    }
+                }
+
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(5.0);
+
                 // ── Ollama tests ──
                 ui.label(theme::subheading("Ollama"));
                 if ui.button("\u{1f50c} Tester connexion").clicked() {
