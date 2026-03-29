@@ -18,10 +18,24 @@ set -euo pipefail
 
 # ── Configuration ──
 PROJECT_NAME="mycommercial"
-VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 ARCH=$(uname -m)
 BUILD_DIR="target/release"
 DIST_DIR="dist"
+
+# Auto-increment patch version (0.2.0 -> 0.2.1 -> 0.2.2 ...)
+bump_version() {
+    local current
+    current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    local major minor patch
+    IFS='.' read -r major minor patch <<< "$current"
+    patch=$((patch + 1))
+    local new_version="${major}.${minor}.${patch}"
+    sed -i "s/^version = \"${current}\"/version = \"${new_version}\"/" Cargo.toml
+    ok "Version: ${current} -> ${new_version}"
+    echo "$new_version"
+}
+
+VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 # Couleurs
 RED='\033[0;31m'
@@ -246,7 +260,10 @@ ensure_all_deps() {
 }
 
 build_release() {
-    step "Compilation release"
+    step "Increment version"
+    VERSION=$(bump_version)
+
+    step "Compilation release v${VERSION}"
     info "Compilation en mode release (GUI native egui/eframe)..."
     cargo build --release 2>&1
 
@@ -265,6 +282,12 @@ build_release() {
         size=$(du -h "${BUILD_DIR}/${PROJECT_NAME}" | cut -f1)
         ok "Binaire strippe: ${size}"
     fi
+
+    # Copy to dist/
+    mkdir -p "${DIST_DIR}"
+    local dist_name="${PROJECT_NAME}-v${VERSION}-${ARCH}-linux"
+    cp "${BUILD_DIR}/${PROJECT_NAME}" "${DIST_DIR}/${dist_name}"
+    ok "Copie: ${DIST_DIR}/${dist_name}"
 }
 
 build_deb() {

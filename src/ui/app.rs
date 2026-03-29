@@ -56,6 +56,8 @@ pub enum AppMessage {
     LinkedInMessageSent,
     OdooLeadCreated { message_id: i64, lead_id: i64 },
     ConnectionTestResult { service: String, success: bool, message: String },
+    LinkedInOAuth2Token(String),
+    LinkedInOAuth2Progress(String),
     Error(String),
     Info(String),
 }
@@ -158,6 +160,9 @@ pub struct MyCommercialApp {
     // Font size
     pub font_size: f32,
 
+    // LinkedIn OAuth2
+    pub linkedin_oauth_in_progress: bool,
+
     // Debug logs
     pub debug_logs: Vec<DebugLogEntry>,
     pub show_debug_logs: bool,
@@ -224,6 +229,7 @@ impl MyCommercialApp {
             settings_items: items,
             editing_setting: None,
             font_size,
+            linkedin_oauth_in_progress: false,
             debug_logs: vec![],
             show_debug_logs: false,
             modal_error: None,
@@ -329,6 +335,17 @@ impl MyCommercialApp {
                     self.toast(format!("Lead Odoo #{} créé", lead_id), theme::SUCCESS);
                     self.refresh_data();
                 }
+                AppMessage::LinkedInOAuth2Token(token) => {
+                    self.linkedin_oauth_in_progress = false;
+                    let _ = self.settings.set("linkedin", "auth_method", "oauth2");
+                    let _ = self.settings.set("linkedin", "access_token", &token);
+                    self.log_debug(DebugLevel::Success, "LinkedIn: token OAuth2 sauvegardé !");
+                    self.toast("LinkedIn connecté avec succès !", theme::SUCCESS);
+                    self.refresh_settings_items();
+                }
+                AppMessage::LinkedInOAuth2Progress(msg) => {
+                    self.log_debug(DebugLevel::Debug, format!("LinkedIn OAuth2: {}", msg));
+                }
                 AppMessage::ConnectionTestResult { service, success, message } => {
                     let level = if success { DebugLevel::Success } else { DebugLevel::Error };
                     self.log_debug(level, format!("[TEST] {}: {}", service, message));
@@ -340,6 +357,7 @@ impl MyCommercialApp {
                 }
                 AppMessage::Error(e) => {
                     self.search_loading = false;
+                    self.linkedin_oauth_in_progress = false;
                     self.log_debug(DebugLevel::Error, format!("ERREUR: {}", e));
                     self.modal_error = Some(e);
                 }
@@ -451,6 +469,42 @@ impl MyCommercialApp {
                 contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl).await {
                 Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::MessageGenerated { contact_id: cid, message: m }),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
+            }
+        });
+    }
+
+    pub fn launch_linkedin_oauth2(&mut self) {
+        if self.linkedin_oauth_in_progress {
+            self.toast("Connexion LinkedIn déjà en cours...", theme::WARNING);
+            return;
+        }
+        let client_id = self.settings.get_or_default("linkedin", "client_id", "");
+        let client_secret = self.settings.get_or_default("linkedin", "client_secret", "");
+        let redirect_uri = self.settings.get_or_default("linkedin", "redirect_uri", "http://localhost:8080/callback");
+
+        if client_id.is_empty() || client_secret.is_empty() {
+            self.log_debug(DebugLevel::Error, "LinkedIn OAuth2: client_id ou client_secret vide. Configurez-les dans Settings > LinkedIn.");
+            self.toast("Configurez d'abord client_id et client_secret dans Settings > LinkedIn", theme::DANGER);
+            return;
+        }
+
+        self.linkedin_oauth_in_progress = true;
+        self.log_debug(DebugLevel::Debug, format!("LinkedIn OAuth2: démarrage du flux (redirect={})", redirect_uri));
+        self.toast("LinkedIn: ouverture du navigateur pour connexion...", theme::INFO);
+
+        let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
+        self.runtime_handle.spawn(async move {
+            Self::send_msg(&tx, &ctx, AppMessage::LinkedInOAuth2Progress(
+                "Serveur local démarré, attente du callback LinkedIn...".into()
+            ));
+            match LinkedInClient::oauth2_full_flow(&client_id, &client_secret, &redirect_uri).await {
+                Ok(token) => {
+                    Self::send_msg(&tx, &ctx, AppMessage::LinkedInOAuth2Token(token));
+                }
+                Err(e) => {
+                    Self::send_msg(&tx, &ctx, AppMessage::Error(format!("LinkedIn OAuth2: {}", e)));
+                }
             }
         });
     }
