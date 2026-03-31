@@ -6,14 +6,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
     ui.heading(theme::heading("Settings"));
     ui.add_space(8.0);
 
+    let panel_height = ui.available_height();
+
     ui.horizontal(|ui| {
         // ── Left: categories (scrollable) ──
         ui.vertical(|ui| {
             ui.set_min_width(180.0);
             ui.set_max_width(200.0);
-            let sidebar_height = ui.available_height();
             egui::ScrollArea::vertical()
-                .max_height(sidebar_height)
+                .max_height(panel_height)
                 .show(ui, |ui| {
                 ui.group(|ui| {
                     ui.label(theme::subheading("Catégories"));
@@ -159,7 +160,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 ui.add_space(8.0);
             }
 
-            let available = ui.available_height() - 10.0;
+            let available = (panel_height - 10.0).max(100.0);
             egui::ScrollArea::vertical().max_height(available).show(ui, |ui| {
                 let mut edit_action: Option<(String, String)> = None;
 
@@ -167,10 +168,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                     .striped(true)
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(egui_extras::Column::exact(180.0))  // Clé
-                    .column(egui_extras::Column::exact(250.0))  // Valeur
-                    .column(egui_extras::Column::remainder())    // Description
-                    .column(egui_extras::Column::exact(60.0))   // Action
+                    .column(egui_extras::Column::initial(150.0).at_least(100.0))  // Clé
+                    .column(egui_extras::Column::initial(200.0).at_least(100.0))  // Valeur
+                    .column(egui_extras::Column::remainder().at_least(150.0))      // Description
+                    .column(egui_extras::Column::exact(60.0))                      // Action
                     .header(24.0, |mut header| {
                         header.col(|ui| { ui.strong("Clé"); });
                         header.col(|ui| { ui.strong("Valeur"); });
