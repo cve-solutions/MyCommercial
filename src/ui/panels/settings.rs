@@ -166,23 +166,39 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             egui::ScrollArea::vertical().max_height(available).show(ui, |ui| {
                 let mut edit_action: Option<(String, String)> = None;
 
+                let val_col_width: f32 = 80.0;
+                let line_height: f32 = 18.0;
+                let chars_per_line = (val_col_width / 8.0).max(1.0) as usize;
+
+                let items = app.settings_items.clone();
+                let row_heights: Vec<f32> = items.iter().map(|(_, value, _, vtype)| {
+                    let display_len = if vtype == "password" && !value.is_empty() {
+                        8
+                    } else {
+                        value.len()
+                    };
+                    let lines = ((display_len as f32 / chars_per_line as f32).ceil() as f32).max(1.0);
+                    (lines * line_height).max(24.0) + 8.0
+                }).collect();
+
                 egui_extras::TableBuilder::new(ui)
                     .striped(true)
                     .resizable(true)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(egui_extras::Column::initial(150.0).at_least(100.0))  // Clé
-                    .column(egui_extras::Column::initial(200.0).at_least(100.0))  // Valeur
-                    .column(egui_extras::Column::remainder().at_least(150.0))      // Description
-                    .column(egui_extras::Column::exact(60.0))                      // Action
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true))
+                    .column(egui_extras::Column::initial(130.0).at_least(80.0))    // Clé
+                    .column(egui_extras::Column::initial(val_col_width).at_least(60.0))  // Valeur
+                    .column(egui_extras::Column::remainder().at_least(150.0))       // Description
+                    .column(egui_extras::Column::exact(40.0))                       // Action
                     .header(24.0, |mut header| {
                         header.col(|ui| { ui.strong("Clé"); });
                         header.col(|ui| { ui.strong("Valeur"); });
                         header.col(|ui| { ui.strong("Description"); });
                         header.col(|ui| { ui.strong(""); });
                     })
-                    .body(|mut body| {
-                        for (key, value, desc, vtype) in &app.settings_items {
-                            body.row(24.0, |mut row| {
+                    .body(|body| {
+                        body.heterogeneous_rows(row_heights.into_iter(), |mut row| {
+                            let idx = row.index();
+                            if let Some((key, value, desc, vtype)) = items.get(idx) {
                                 row.col(|ui| {
                                     ui.label(egui::RichText::new(key).monospace());
                                 });
@@ -192,18 +208,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                                     } else {
                                         value.clone()
                                     };
-                                    ui.label(egui::RichText::new(display).color(theme::INFO));
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(display).color(theme::INFO)
+                                    ).wrap());
                                 });
                                 row.col(|ui| {
-                                    ui.label(egui::RichText::new(desc).color(theme::TEXT_DIM).small());
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(desc).color(theme::TEXT_DIM).small()
+                                    ).wrap());
                                 });
                                 row.col(|ui| {
                                     if ui.small_button("\u{270f}\u{fe0f}").clicked() {
                                         edit_action = Some((key.clone(), value.clone()));
                                     }
                                 });
-                            });
-                        }
+                            }
+                        });
                     });
 
                 if let Some((key, value)) = edit_action {
