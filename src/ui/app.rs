@@ -192,6 +192,7 @@ impl MyCommercialApp {
         let stats = db::get_rapport_stats(&db).unwrap_or_default();
         let contacts = db::get_contacts(&db, 100, 0).unwrap_or_default();
         let messages = db::get_messages(&db, 100, 0).unwrap_or_default();
+        let _ = db::seed_solutions(&db);
         let solutions = db::get_solutions(&db).unwrap_or_default();
         let cats = db::get_all_categories(&db).unwrap_or_default();
         let items = if !cats.is_empty() {

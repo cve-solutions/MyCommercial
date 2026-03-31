@@ -434,6 +434,67 @@ pub fn get_solutions(db: &DbPool) -> Result<Vec<Solution>> {
     Ok(results)
 }
 
+pub fn seed_solutions(db: &DbPool) -> Result<()> {
+    let existing = get_solutions(db)?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+    let seeds = vec![
+        Solution {
+            id: None,
+            nom: "TakeOver".to_string(),
+            description: "Prise en main à distance sécurisée. Transport vidéo optimisé via QUIC/UDP à ~300 Kbps, analyse IA intégrée et sécurité de niveau ANSSI.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+        Solution {
+            id: None,
+            nom: "GoverDirectory".to_string(),
+            description: "Annuaire d'entreprise souverain et conforme. Gestion centralisée des identités, SSO SAML/OIDC, compatibilité LDAP et Active Directory.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+        Solution {
+            id: None,
+            nom: "GoverDirectory-PKI".to_string(),
+            description: "Infrastructure à clés publiques souveraine. Émission et gestion des certificats X.509, signature électronique eIDAS et chiffrement S/MIME, intégrés à votre annuaire.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+        Solution {
+            id: None,
+            nom: "ProxOps".to_string(),
+            description: "Gestion intelligente pour Proxmox VE. Monitoring temps réel, capacity planning prédictif et équilibrage de charge automatique.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+        Solution {
+            id: None,
+            nom: "AutoCompose".to_string(),
+            description: "Reverse-engineering de conteneurs Docker et Podman. Filtrage des secrets, validation Compose et export YAML/JSON/TOML prêts à versionner.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+        Solution {
+            id: None,
+            nom: "OlympusChain".to_string(),
+            description: "Blockchain d'entreprise souveraine pour la gestion documentaire sécurisée. Stockage immutable, consensus PoA, chiffrement AES-256 et conformité RGPD/NIS2 native.".to_string(),
+            fichier_path: None,
+            resume_ia: None,
+            date_creation: None,
+        },
+    ];
+    for sol in &seeds {
+        insert_solution(db, sol)?;
+    }
+    Ok(())
+}
+
 // ── Solutions update ──
 
 pub fn update_solution_summary(db: &DbPool, sol_id: i64, summary: &str) -> Result<()> {
