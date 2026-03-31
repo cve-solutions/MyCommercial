@@ -13,6 +13,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         ui.vertical(|ui| {
             ui.set_min_width(180.0);
             ui.set_max_width(200.0);
+            ui.set_min_height(panel_height);
             egui::ScrollArea::vertical()
                 .max_height(panel_height)
                 .show(ui, |ui| {
@@ -131,6 +132,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 
         // ── Right: settings table ──
         ui.vertical(|ui| {
+            ui.set_min_height(panel_height);
             let cat_name = app.settings_categories.get(app.settings_selected_cat)
                 .map(|s| s.as_str())
                 .unwrap_or("—");
