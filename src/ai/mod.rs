@@ -98,14 +98,28 @@ impl OllamaClient {
             anyhow::bail!("Aucun modèle Ollama installé. Installez un modèle avec: ollama pull mistral");
         }
 
-        // Priorité: modèles orientés chat/instruction
-        let preferred_families = ["mistral", "llama", "gemma", "phi", "qwen", "deepseek"];
-        let preferred_sizes = ["7b", "8b", "13b", "14b"]; // Tailles raisonnables
+        // Exclure les modèles cloud/proxy (non locaux)
+        let excluded_keywords = ["cloud", "remote", "proxy", "api"];
+        let local_models: Vec<&OllamaModel> = models.iter()
+            .filter(|m| {
+                let name = m.name.to_lowercase();
+                !excluded_keywords.iter().any(|kw| name.contains(kw))
+            })
+            .collect();
+
+        if local_models.is_empty() {
+            anyhow::bail!("Aucun modèle local trouvé (les modèles cloud ont été exclus).");
+        }
+
+        // Familles préférées pour du français commercial (meilleur en haut)
+        let preferred_families = ["mistral", "qwen", "llama", "gemma", "deepseek", "phi"];
+        // Tailles idéales : assez gros pour le français, assez petit pour tourner
+        let preferred_sizes = ["14b", "13b", "8b", "7b", "3b", "1b"];
 
         let mut best: Option<&OllamaModel> = None;
-        let mut best_score = 0i32;
+        let mut best_score = -1i32;
 
-        for model in &models {
+        for model in &local_models {
             let name_lower = model.name.to_lowercase();
             let mut score = 0i32;
 
@@ -117,7 +131,7 @@ impl OllamaClient {
                 }
             }
 
-            // Bonus pour taille raisonnable
+            // Bonus pour taille (plus gros = meilleur pour le français, dans la limite du raisonnable)
             if let Some(ref param_size) = model.parameter_size {
                 let ps = param_size.to_lowercase();
                 for (i, size) in preferred_sizes.iter().enumerate() {
@@ -128,9 +142,14 @@ impl OllamaClient {
                 }
             }
 
-            // Bonus pour modèles "instruct" ou "chat"
+            // Bonus pour modèles "instruct" ou "chat" (meilleurs pour suivre des consignes)
             if name_lower.contains("instruct") || name_lower.contains("chat") {
                 score += 15;
+            }
+
+            // Malus pour les modèles embedding/vision uniquement
+            if name_lower.contains("embed") || name_lower.contains("vision-only") {
+                score -= 100;
             }
 
             if score > best_score {
@@ -139,7 +158,7 @@ impl OllamaClient {
             }
         }
 
-        let selected = best.unwrap_or(&models[0]);
+        let selected = best.unwrap_or(local_models[0]);
         self.model = selected.name.clone();
         Ok(selected.name.clone())
     }
