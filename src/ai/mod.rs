@@ -178,7 +178,7 @@ impl OllamaClient {
     }
 
     /// Appel générique à Ollama
-    async fn generate(&self, prompt: &str) -> Result<String> {
+    pub async fn generate(&self, prompt: &str) -> Result<String> {
         if self.model.is_empty() {
             anyhow::bail!("Aucun modèle Ollama sélectionné. Configurez-le dans Settings > Ollama.");
         }

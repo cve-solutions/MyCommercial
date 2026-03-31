@@ -150,6 +150,7 @@ fn seed_default_settings(conn: &Connection) -> Result<()> {
         ("app", "language", "fr", "Langue de l'application", "select"),
         ("app", "log_level", "info", "Niveau de log", "select"),
         ("app", "db_path", "", "Chemin de la base de données (vide = défaut)", "string"),
+        ("app", "solutions_url", "", "URL du site web pour importer les solutions", "string"),
     ];
 
     for (cat, key, val, desc, vtype) in defaults {

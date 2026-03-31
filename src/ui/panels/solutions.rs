@@ -8,15 +8,28 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
     ui.horizontal(|ui| {
         ui.heading(theme::heading("Solutions"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("\u{2795} Ajouter une solution").clicked() {
+            if ui.button("\u{2795} Ajouter").clicked() {
                 app.show_add_solution = true;
                 app.new_sol_name.clear();
                 app.new_sol_desc.clear();
                 app.new_sol_path.clear();
             }
             if ui.button("\u{1f504} Rafraîchir").clicked() { app.refresh_data(); }
+            let url = app.settings.get_or_default("app", "solutions_url", "");
+            if !url.is_empty() {
+                if ui.button("\u{1f310} Importer depuis le site").clicked() {
+                    app.launch_solutions_from_url();
+                }
+            }
         });
     });
+    // URL reference
+    let url = app.settings.get_or_default("app", "solutions_url", "");
+    if url.is_empty() {
+        ui.label(egui::RichText::new("Configurez l'URL dans Settings > app > solutions_url pour activer l'import automatique.").color(theme::TEXT_DIM).small());
+    } else {
+        ui.label(egui::RichText::new(format!("Source : {}", url)).color(theme::TEXT_DIM).small());
+    }
     ui.add_space(8.0);
 
     // ── Add solution modal ──
