@@ -58,6 +58,7 @@ pub enum AppMessage {
     ConnectionTestResult { service: String, success: bool, message: String },
     LinkedInOAuth2Token(String),
     LinkedInOAuth2Progress(String),
+    SolutionsFromUrl(Vec<crate::models::Solution>),
     Error(String),
     Info(String),
 }
@@ -127,6 +128,9 @@ pub struct MyCommercialApp {
     pub search_mode: SearchMode,
     pub search_entreprises: Vec<Entreprise>,
     pub search_entreprises_total: u32,
+    pub search_entreprises_page: u32,
+    pub search_code_ape: String,
+    pub search_effectifs: usize, // index into TrancheEffectifs::all(), 0 = Tous
     pub search_contacts: Vec<Contact>,
     pub search_loading: bool,
 
@@ -192,6 +196,7 @@ impl MyCommercialApp {
         let stats = db::get_rapport_stats(&db).unwrap_or_default();
         let contacts = db::get_contacts(&db, 100, 0).unwrap_or_default();
         let messages = db::get_messages(&db, 100, 0).unwrap_or_default();
+        let _ = db::seed_solutions(&db);
         let solutions = db::get_solutions(&db).unwrap_or_default();
         let cats = db::get_all_categories(&db).unwrap_or_default();
         let items = if !cats.is_empty() {
@@ -214,6 +219,9 @@ impl MyCommercialApp {
             search_mode: SearchMode::Entreprises,
             search_entreprises: vec![],
             search_entreprises_total: 0,
+            search_entreprises_page: 1,
+            search_code_ape: String::new(),
+            search_effectifs: 0,
             search_contacts: vec![],
             search_loading: false,
             contacts, contacts_page: 0, _contact_selected: None,
@@ -355,6 +363,14 @@ impl MyCommercialApp {
                         self.toast(format!("{}: {}", service, message), theme::DANGER);
                     }
                 }
+                AppMessage::SolutionsFromUrl(new_sols) => {
+                    let count = new_sols.len();
+                    for sol in new_sols {
+                        let _ = db::insert_solution(&self.db, &sol);
+                    }
+                    self.toast(format!("{} solution(s) importée(s) depuis l'URL", count), theme::SUCCESS);
+                    self.solutions = db::get_solutions(&self.db).unwrap_or_default();
+                }
                 AppMessage::Error(e) => {
                     self.search_loading = false;
                     self.linkedin_oauth_in_progress = false;
@@ -372,16 +388,29 @@ impl MyCommercialApp {
     // ── Async Launchers ──
 
     pub fn launch_search_entreprises(&mut self) {
+        self.launch_search_entreprises_page(self.search_entreprises_page);
+    }
+
+    pub fn launch_search_entreprises_page(&mut self, page: u32) {
         if self.search_query.is_empty() { return; }
         self.search_loading = true;
+        self.search_entreprises_page = page;
         let tx = self.tx.clone();
         let ctx = self.egui_ctx.clone();
         let q = self.search_query.clone();
         let db = self.db.clone();
         let s = SettingsManager::new(self.db.clone());
+        let code_ape = if self.search_code_ape.is_empty() { None } else { Some(self.search_code_ape.clone()) };
+        let effectifs = if self.search_effectifs == 0 {
+            None
+        } else {
+            crate::models::TrancheEffectifs::all()
+                .get(self.search_effectifs - 1)
+                .map(|t| t.code.clone())
+        };
         self.runtime_handle.spawn(async move {
             let c = DataGouvClient::new(&s, db);
-            match c.search_open(&q, None, None, None, 1, 25).await {
+            match c.search_open(&q, code_ape.as_deref(), effectifs.as_deref(), None, page, 25).await {
                 Ok((e, t)) => Self::send_msg(&tx, &ctx, AppMessage::EntreprisesFound(e, t)),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
@@ -438,6 +467,105 @@ impl MyCommercialApp {
             match c.auto_select_model().await {
                 Ok(n) => Self::send_msg(&tx, &ctx, AppMessage::OllamaModelSelected(n)),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
+            }
+        });
+    }
+
+    pub fn launch_solutions_from_url(&mut self) {
+        let url = self.settings.get_or_default("app", "solutions_url", "");
+        if url.is_empty() {
+            self.modal_error = Some("Configurez d'abord l'URL dans Settings > app > solutions_url".into());
+            return;
+        }
+        self.toast("Import des solutions depuis l'URL...", theme::INFO);
+        let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let s = SettingsManager::new(self.db.clone());
+        let db = self.db.clone();
+        self.runtime_handle.spawn(async move {
+            // 1. Fetch web page
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap();
+            let html = match client.get(&url).send().await {
+                Ok(resp) => match resp.text().await {
+                    Ok(t) => t,
+                    Err(e) => { Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Erreur lecture page: {}", e))); return; }
+                },
+                Err(e) => { Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Erreur connexion URL: {}", e))); return; }
+            };
+
+            // Strip HTML tags for cleaner content
+            let text: String = html
+                .split('<')
+                .filter_map(|s| s.split_once('>').map(|(_, t)| t))
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let truncated = if text.len() > 8000 { &text[..8000] } else { &text };
+
+            // 2. Ask Ollama to extract products
+            let prompt = format!(
+                "Analyse le contenu suivant d'un site web d'éditeur logiciel. \
+                 Extrais TOUS les produits/solutions mentionnés.\n\n\
+                 Pour CHAQUE produit, retourne EXACTEMENT ce format (un produit par bloc, séparés par ---):\n\
+                 NOM: <nom du produit>\n\
+                 DESCRIPTION: <description attractive de 2-3 phrases pour un décideur CEO/CTO/RSSI, \
+                 mettant en avant les bénéfices business et la valeur ajoutée>\n\
+                 ---\n\n\
+                 Contenu du site:\n{}", truncated
+            );
+
+            let ai = OllamaClient::new(&s);
+            let ai_response = match ai.generate(&prompt).await {
+                Ok(r) => r,
+                Err(e) => { Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Erreur IA: {}", e))); return; }
+            };
+
+            // 3. Parse AI response into Solutions
+            let mut solutions = Vec::new();
+            for block in ai_response.split("---") {
+                let block = block.trim();
+                if block.is_empty() { continue; }
+                let mut nom = String::new();
+                let mut desc = String::new();
+                for line in block.lines() {
+                    let line = line.trim();
+                    if let Some(n) = line.strip_prefix("NOM:") {
+                        nom = n.trim().to_string();
+                    } else if let Some(d) = line.strip_prefix("DESCRIPTION:") {
+                        desc = d.trim().to_string();
+                    } else if !nom.is_empty() && !line.starts_with("NOM") {
+                        // Continuation of description
+                        if !desc.is_empty() { desc.push(' '); }
+                        desc.push_str(line);
+                    }
+                }
+                if !nom.is_empty() {
+                    solutions.push(crate::models::Solution {
+                        id: None,
+                        nom,
+                        description: desc,
+                        fichier_path: None,
+                        resume_ia: None,
+                        date_creation: None,
+                    });
+                }
+            }
+
+            if solutions.is_empty() {
+                Self::send_msg(&tx, &ctx, AppMessage::Error("L'IA n'a trouvé aucun produit sur cette page.".into()));
+            } else {
+                // Clear existing solutions before importing
+                let _ = (|| -> anyhow::Result<()> {
+                    let conn = db.lock().unwrap();
+                    conn.execute("DELETE FROM solutions", [])?;
+                    Ok(())
+                })();
+                Self::send_msg(&tx, &ctx, AppMessage::SolutionsFromUrl(solutions));
             }
         });
     }
