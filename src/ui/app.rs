@@ -128,6 +128,7 @@ pub struct MyCommercialApp {
     pub search_mode: SearchMode,
     pub search_entreprises: Vec<Entreprise>,
     pub search_entreprises_total: u32,
+    pub search_entreprises_page: u32,
     pub search_code_ape: String,
     pub search_effectifs: usize, // index into TrancheEffectifs::all(), 0 = Tous
     pub search_contacts: Vec<Contact>,
@@ -218,6 +219,7 @@ impl MyCommercialApp {
             search_mode: SearchMode::Entreprises,
             search_entreprises: vec![],
             search_entreprises_total: 0,
+            search_entreprises_page: 1,
             search_code_ape: String::new(),
             search_effectifs: 0,
             search_contacts: vec![],
@@ -386,8 +388,13 @@ impl MyCommercialApp {
     // ── Async Launchers ──
 
     pub fn launch_search_entreprises(&mut self) {
+        self.launch_search_entreprises_page(self.search_entreprises_page);
+    }
+
+    pub fn launch_search_entreprises_page(&mut self, page: u32) {
         if self.search_query.is_empty() { return; }
         self.search_loading = true;
+        self.search_entreprises_page = page;
         let tx = self.tx.clone();
         let ctx = self.egui_ctx.clone();
         let q = self.search_query.clone();
@@ -403,7 +410,7 @@ impl MyCommercialApp {
         };
         self.runtime_handle.spawn(async move {
             let c = DataGouvClient::new(&s, db);
-            match c.search_open(&q, code_ape.as_deref(), effectifs.as_deref(), None, 1, 25).await {
+            match c.search_open(&q, code_ape.as_deref(), effectifs.as_deref(), None, page, 25).await {
                 Ok((e, t)) => Self::send_msg(&tx, &ctx, AppMessage::EntreprisesFound(e, t)),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }

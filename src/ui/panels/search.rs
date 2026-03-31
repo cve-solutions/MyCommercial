@@ -17,6 +17,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 .hint_text("Nom d'entreprise, mot-clé...")
         );
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            app.search_entreprises_page = 1;
             match app.search_mode {
                 SearchMode::Entreprises => app.launch_search_entreprises(),
                 SearchMode::LinkedIn => app.launch_search_linkedin(),
@@ -27,6 +28,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         ui.selectable_value(&mut app.search_mode, SearchMode::LinkedIn, "\u{1f517} LinkedIn");
 
         if ui.button("\u{1f50d} Rechercher").clicked() {
+            app.search_entreprises_page = 1;
             match app.search_mode {
                 SearchMode::Entreprises => app.launch_search_entreprises(),
                 SearchMode::LinkedIn => app.launch_search_linkedin(),
@@ -75,15 +77,21 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 }
 
 fn show_entreprises(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
-    ui.label(theme::subheading(&format!(
-        "Entreprises trouvées : {} (total: {})",
-        app.search_entreprises.len(),
-        app.search_entreprises_total
-    )));
+    let per_page: u32 = 25;
+    let total = app.search_entreprises_total;
+    let page = app.search_entreprises_page;
+    let total_pages = if total == 0 { 1 } else { (total + per_page - 1) / per_page };
+
+    ui.horizontal(|ui| {
+        ui.label(theme::subheading(&format!(
+            "Entreprises : {} (total: {}) — Page {}/{}",
+            app.search_entreprises.len(), total, page, total_pages
+        )));
+    });
     ui.add_space(5.0);
 
     let available = ui.available_height();
-    egui::ScrollArea::vertical().max_height(available - 10.0).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(available - 40.0).show(ui, |ui| {
         egui_extras::TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
@@ -115,6 +123,24 @@ fn show_entreprises(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 }
             });
     });
+
+    // ── Pagination ──
+    if total > per_page {
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            if page > 1 {
+                if ui.button("\u{2b05} Page précédente").clicked() {
+                    app.launch_search_entreprises_page(page - 1);
+                }
+            }
+            ui.label(egui::RichText::new(format!("Page {} / {}", page, total_pages)).color(theme::TEXT_DIM));
+            if page < total_pages {
+                if ui.button("Page suivante \u{27a1}").clicked() {
+                    app.launch_search_entreprises_page(page + 1);
+                }
+            }
+        });
+    }
 }
 
 fn show_linkedin(ui: &mut egui::Ui, app: &mut MyCommercialApp) {

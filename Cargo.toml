@@ -1,6 +1,6 @@
 [package]
 name = "mycommercial"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Application de prospection commerciale LinkedIn avec IA locale"
 authors = ["CVE Solutions"]
