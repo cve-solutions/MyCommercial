@@ -1,5 +1,6 @@
 use egui;
 use crate::db;
+use crate::models::TrancheEffectifs;
 use crate::ui::app::{MyCommercialApp, SearchMode};
 use crate::ui::theme;
 
@@ -32,6 +33,38 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             }
         }
     });
+
+    // ── Filters (Entreprises mode only) ──
+    if matches!(app.search_mode, SearchMode::Entreprises) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Code APE :");
+            ui.add_sized(
+                [80.0, 20.0],
+                egui::TextEdit::singleline(&mut app.search_code_ape)
+                    .hint_text("ex: 62.01Z")
+            );
+
+            ui.add_space(15.0);
+            ui.label("Effectifs :");
+            let tranches = TrancheEffectifs::all();
+            let current_label = if app.search_effectifs == 0 {
+                "Tous".to_string()
+            } else {
+                tranches.get(app.search_effectifs - 1)
+                    .map(|t| t.libelle.clone())
+                    .unwrap_or_else(|| "Tous".to_string())
+            };
+            egui::ComboBox::from_id_salt("effectifs_filter")
+                .selected_text(&current_label)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_value(&mut app.search_effectifs, 0, "Tous").clicked() {}
+                    for (i, t) in tranches.iter().enumerate() {
+                        if ui.selectable_value(&mut app.search_effectifs, i + 1, &t.libelle).clicked() {}
+                    }
+                });
+        });
+    }
 
     ui.add_space(10.0);
 

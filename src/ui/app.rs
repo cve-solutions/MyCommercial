@@ -128,6 +128,8 @@ pub struct MyCommercialApp {
     pub search_mode: SearchMode,
     pub search_entreprises: Vec<Entreprise>,
     pub search_entreprises_total: u32,
+    pub search_code_ape: String,
+    pub search_effectifs: usize, // index into TrancheEffectifs::all(), 0 = Tous
     pub search_contacts: Vec<Contact>,
     pub search_loading: bool,
 
@@ -216,6 +218,8 @@ impl MyCommercialApp {
             search_mode: SearchMode::Entreprises,
             search_entreprises: vec![],
             search_entreprises_total: 0,
+            search_code_ape: String::new(),
+            search_effectifs: 0,
             search_contacts: vec![],
             search_loading: false,
             contacts, contacts_page: 0, _contact_selected: None,
@@ -389,9 +393,17 @@ impl MyCommercialApp {
         let q = self.search_query.clone();
         let db = self.db.clone();
         let s = SettingsManager::new(self.db.clone());
+        let code_ape = if self.search_code_ape.is_empty() { None } else { Some(self.search_code_ape.clone()) };
+        let effectifs = if self.search_effectifs == 0 {
+            None
+        } else {
+            crate::models::TrancheEffectifs::all()
+                .get(self.search_effectifs - 1)
+                .map(|t| t.code.clone())
+        };
         self.runtime_handle.spawn(async move {
             let c = DataGouvClient::new(&s, db);
-            match c.search_open(&q, None, None, None, 1, 25).await {
+            match c.search_open(&q, code_ape.as_deref(), effectifs.as_deref(), None, 1, 25).await {
                 Ok((e, t)) => Self::send_msg(&tx, &ctx, AppMessage::EntreprisesFound(e, t)),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
