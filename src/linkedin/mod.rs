@@ -97,41 +97,45 @@ impl LinkedInClient {
         let cookie = self.cookie_li_at.as_ref()
             .context("Recherche LinkedIn nécessite le cookie li_at. Configurez-le dans Settings > LinkedIn.")?;
 
-        let mut filters = vec![
-            format!("(type:CURRENT_TITLE,values:List({}))", urlencoding::encode(title)),
-        ];
-        if let Some(comp) = company {
-            filters.push(format!("(type:CURRENT_COMPANY,values:List({}))", urlencoding::encode(comp)));
-        }
-        let _filter_str = format!("List({})", filters.join(","));
-
         let url = format!(
-            "https://www.linkedin.com/voyager/api/search/dash/clusters?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165&origin=GLOBAL_SEARCH_HEADER&q=all&query=(keywords:{},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE),currentTitle:List({})))&start={}&count={}",
-            urlencoding::encode(keywords),
-            urlencoding::encode(title),
-            start,
-            count,
+            "https://www.linkedin.com/voyager/api/search/dash/clusters\
+            ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
+            &origin=GLOBAL_SEARCH_HEADER\
+            &q=all\
+            &query=(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,\
+queryParameters:(resultType:List(PEOPLE)))\
+            &start={start}&count={count}",
+            keywords = urlencoding::encode(keywords),
+            start = start,
+            count = count,
         );
 
-        let resp = self.client
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let resp = http_client
             .get(&url)
-            .header("Cookie", format!("li_at={}", cookie))
-            .header("Csrf-Token", "ajax:0")
             .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
             .header("X-Li-Lang", "fr_FR")
+            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
             .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
-            .context("Erreur de connexion à LinkedIn Voyager API")?;
+            .context("Erreur de connexion à LinkedIn — vérifiez votre accès réseau et le cookie li_at")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            if status.as_u16() == 403 || status.as_u16() == 401 {
-                anyhow::bail!("Cookie li_at expiré ou invalide. Reconnectez-vous à LinkedIn et mettez à jour le cookie dans Settings.");
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                anyhow::bail!("Cookie li_at expiré ou invalide (HTTP {}). Reconnectez-vous à LinkedIn et mettez à jour le cookie.", status);
             }
-            anyhow::bail!("LinkedIn Voyager error {}: {}", status,
+            anyhow::bail!("LinkedIn error {} : {}", status,
                 if body.len() > 300 { &body[..300] } else { &body });
         }
 
@@ -140,54 +144,98 @@ impl LinkedInClient {
 
         // Parse Voyager response
         let mut contacts = Vec::new();
+        Self::parse_voyager_results(&data, &mut contacts, company);
+
+        Ok(contacts)
+    }
+
+    fn parse_voyager_results(data: &serde_json::Value, contacts: &mut Vec<Contact>, company: Option<&str>) {
+        // Try "elements" (cluster format)
         if let Some(elements) = data.get("elements").and_then(|e| e.as_array()) {
             for element in elements {
-                let items = element.get("items").and_then(|i| i.as_array());
-                if let Some(items) = items {
+                if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
                     for item in items {
-                        let entity = item.get("item")
-                            .and_then(|i| i.get("entityResult"));
-                        if let Some(entity) = entity {
-                            let title_text = entity.get("title")
-                                .and_then(|t| t.get("text"))
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
-                            let parts: Vec<&str> = title_text.splitn(2, ' ').collect();
-                            let prenom = parts.first().unwrap_or(&"").to_string();
-                            let nom = parts.get(1).unwrap_or(&"").to_string();
-
-                            let headline = entity.get("primarySubtitle")
-                                .and_then(|s| s.get("text"))
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            let nav_url = entity.get("navigationUrl")
-                                .and_then(|u| u.as_str())
-                                .map(|u| u.split('?').next().unwrap_or(u).to_string());
-
-                            let public_id = nav_url.as_ref()
-                                .and_then(|u| u.strip_prefix("https://www.linkedin.com/in/"))
-                                .map(|s| s.trim_end_matches('/').to_string());
-
-                            contacts.push(Contact {
-                                id: None,
-                                linkedin_id: public_id,
-                                prenom,
-                                nom,
-                                poste: headline,
-                                entreprise_siren: None,
-                                entreprise_nom: company.map(|s| s.to_string()),
-                                linkedin_url: nav_url,
-                                email: None,
-                            });
+                        if let Some(contact) = Self::parse_entity_result(item, company) {
+                            contacts.push(contact);
                         }
                     }
                 }
             }
         }
 
-        Ok(contacts)
+        // Try "included" (normalized format) if no results from elements
+        if contacts.is_empty() {
+            if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
+                for item in included {
+                    let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+                    if type_name.contains("MiniProfile") || type_name.contains("EntityResult") {
+                        if let Some(contact) = Self::parse_mini_profile(item, company) {
+                            contacts.push(contact);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn parse_entity_result(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
+        let entity = item.get("item")
+            .and_then(|i| i.get("entityResult"))?;
+
+        let title_text = entity.get("title")
+            .and_then(|t| t.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        if title_text.is_empty() { return None; }
+
+        let parts: Vec<&str> = title_text.splitn(2, ' ').collect();
+        let prenom = parts.first().unwrap_or(&"").to_string();
+        let nom = parts.get(1).unwrap_or(&"").to_string();
+
+        let headline = entity.get("primarySubtitle")
+            .and_then(|s| s.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let nav_url = entity.get("navigationUrl")
+            .and_then(|u| u.as_str())
+            .map(|u| u.split('?').next().unwrap_or(u).to_string());
+
+        let public_id = nav_url.as_ref()
+            .and_then(|u| u.strip_prefix("https://www.linkedin.com/in/"))
+            .map(|s| s.trim_end_matches('/').to_string());
+
+        Some(Contact {
+            id: None,
+            linkedin_id: public_id,
+            prenom,
+            nom,
+            poste: headline,
+            entreprise_siren: None,
+            entreprise_nom: company.map(|s| s.to_string()),
+            linkedin_url: nav_url,
+            email: None,
+        })
+    }
+
+    fn parse_mini_profile(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
+        let first = item.get("firstName").and_then(|f| f.as_str())?;
+        let last = item.get("lastName").and_then(|l| l.as_str()).unwrap_or("");
+        let occupation = item.get("occupation").and_then(|o| o.as_str()).unwrap_or("");
+        let public_id = item.get("publicIdentifier").and_then(|p| p.as_str());
+
+        Some(Contact {
+            id: None,
+            linkedin_id: public_id.map(|s| s.to_string()),
+            prenom: first.to_string(),
+            nom: last.to_string(),
+            poste: occupation.to_string(),
+            entreprise_siren: None,
+            entreprise_nom: company.map(|s| s.to_string()),
+            linkedin_url: public_id.map(|id| format!("https://www.linkedin.com/in/{}", id)),
+            email: None,
+        })
     }
 
     /// Envoie un message LinkedIn à un contact
