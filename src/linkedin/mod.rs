@@ -139,14 +139,86 @@ queryParameters:(resultType:List(PEOPLE)))\
                 if body.len() > 300 { &body[..300] } else { &body });
         }
 
-        let data: serde_json::Value = resp.json().await
-            .context("Erreur parsing réponse LinkedIn")?;
+        let body_text = resp.text().await
+            .context("Erreur lecture réponse LinkedIn")?;
+
+        let data: serde_json::Value = serde_json::from_str(&body_text)
+            .context("Erreur parsing JSON LinkedIn")?;
 
         // Parse Voyager response
         let mut contacts = Vec::new();
         Self::parse_voyager_results(&data, &mut contacts, company);
 
         Ok(contacts)
+    }
+
+    /// Même que search_people mais retourne aussi des infos de debug
+    pub async fn search_people_debug(
+        &self,
+        keywords: &str,
+        title: &str,
+        company: Option<&str>,
+        start: u32,
+        count: u32,
+    ) -> Result<(Vec<Contact>, String)> {
+        let cookie = self.cookie_li_at.as_ref()
+            .context("Recherche LinkedIn nécessite le cookie li_at.")?;
+
+        let url = format!(
+            "https://www.linkedin.com/voyager/api/search/dash/clusters\
+            ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
+            &origin=GLOBAL_SEARCH_HEADER\
+            &q=all\
+            &query=(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,\
+queryParameters:(resultType:List(PEOPLE)))\
+            &start={start}&count={count}",
+            keywords = urlencoding::encode(keywords),
+            start = start,
+            count = count,
+        );
+
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let resp = http_client
+            .get(&url)
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
+            .header("X-Li-Lang", "fr_FR")
+            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
+            .header("X-Restli-Protocol-Version", "2.0.0")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Erreur de connexion à LinkedIn")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("LinkedIn error {}: {}", status, if body.len() > 300 { &body[..300] } else { &body });
+        }
+
+        let body_text = resp.text().await.unwrap_or_default();
+        let data: serde_json::Value = serde_json::from_str(&body_text)
+            .context("Erreur parsing JSON")?;
+
+        let mut contacts = Vec::new();
+        Self::parse_voyager_results(&data, &mut contacts, company);
+
+        // Build debug info
+        let keys: Vec<String> = data.as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        let el_count = data.get("elements").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
+        let inc_count = data.get("included").and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0);
+        let preview = if body_text.len() > 400 { &body_text[..400] } else { &body_text };
+        let debug = format!("keys={:?}, elements={}, included={}, body_preview={}", keys, el_count, inc_count, preview);
+
+        Ok((contacts, debug))
     }
 
     fn parse_voyager_results(data: &serde_json::Value, contacts: &mut Vec<Contact>, company: Option<&str>) {
