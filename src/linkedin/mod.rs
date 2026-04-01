@@ -222,32 +222,114 @@ queryParameters:(resultType:List(PEOPLE)))\
     }
 
     fn parse_voyager_results(data: &serde_json::Value, contacts: &mut Vec<Contact>, company: Option<&str>) {
-        // Try "elements" (cluster format)
-        if let Some(elements) = data.get("elements").and_then(|e| e.as_array()) {
-            for element in elements {
-                if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
-                    for item in items {
-                        if let Some(contact) = Self::parse_entity_result(item, company) {
-                            contacts.push(contact);
+        // Format 1: data.elements (LinkedIn 2024+ normalized response)
+        if let Some(data_obj) = data.get("data") {
+            if let Some(elements) = data_obj.get("elements").and_then(|e| e.as_array()) {
+                for element in elements {
+                    if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
+                        for item in items {
+                            if let Some(contact) = Self::parse_entity_result(item, company) {
+                                contacts.push(contact);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Try "included" (normalized format) if no results from elements
+        // Format 2: top-level elements (older format)
+        if contacts.is_empty() {
+            if let Some(elements) = data.get("elements").and_then(|e| e.as_array()) {
+                for element in elements {
+                    if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
+                        for item in items {
+                            if let Some(contact) = Self::parse_entity_result(item, company) {
+                                contacts.push(contact);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Format 3: "included" array with profile objects
         if contacts.is_empty() {
             if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
                 for item in included {
                     let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
-                    if type_name.contains("MiniProfile") || type_name.contains("EntityResult") {
-                        if let Some(contact) = Self::parse_mini_profile(item, company) {
+                    // Match various LinkedIn profile types
+                    if type_name.contains("Profile") || type_name.contains("MiniProfile")
+                        || type_name.contains("EntityResult") {
+                        if let Some(contact) = Self::parse_included_profile(item, company) {
                             contacts.push(contact);
                         }
                     }
                 }
             }
         }
+    }
+
+    fn parse_included_profile(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
+        // Try firstName/lastName (MiniProfile / Profile format)
+        if let Some(first) = item.get("firstName").and_then(|f| f.as_str()) {
+            let last = item.get("lastName").and_then(|l| l.as_str()).unwrap_or("");
+            let occupation = item.get("occupation").and_then(|o| o.as_str())
+                .or_else(|| item.get("headline").and_then(|h| h.as_str()))
+                .unwrap_or("");
+            let public_id = item.get("publicIdentifier").and_then(|p| p.as_str());
+
+            if first.is_empty() && last.is_empty() { return None; }
+
+            return Some(Contact {
+                id: None,
+                linkedin_id: public_id.map(|s| s.to_string()),
+                prenom: first.to_string(),
+                nom: last.to_string(),
+                poste: occupation.to_string(),
+                entreprise_siren: None,
+                entreprise_nom: company.map(|s| s.to_string()),
+                linkedin_url: public_id.map(|id| format!("https://www.linkedin.com/in/{}", id)),
+                email: None,
+            });
+        }
+
+        // Try title.text (EntityResult format in included)
+        let title_text = item.get("title")
+            .and_then(|t| t.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        if title_text.is_empty() { return None; }
+
+        let parts: Vec<&str> = title_text.splitn(2, ' ').collect();
+        let prenom = parts.first().unwrap_or(&"").to_string();
+        let nom = parts.get(1).unwrap_or(&"").to_string();
+
+        let headline = item.get("primarySubtitle")
+            .and_then(|s| s.get("text"))
+            .and_then(|t| t.as_str())
+            .or_else(|| item.get("headline").and_then(|h| h.get("text")).and_then(|t| t.as_str()))
+            .unwrap_or("")
+            .to_string();
+
+        let nav_url = item.get("navigationUrl")
+            .and_then(|u| u.as_str())
+            .map(|u| u.split('?').next().unwrap_or(u).to_string());
+
+        let public_id = nav_url.as_ref()
+            .and_then(|u| u.strip_prefix("https://www.linkedin.com/in/"))
+            .map(|s| s.trim_end_matches('/').to_string());
+
+        Some(Contact {
+            id: None,
+            linkedin_id: public_id,
+            prenom,
+            nom,
+            poste: headline,
+            entreprise_siren: None,
+            entreprise_nom: company.map(|s| s.to_string()),
+            linkedin_url: nav_url,
+            email: None,
+        })
     }
 
     fn parse_entity_result(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
