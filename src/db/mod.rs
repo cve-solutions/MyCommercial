@@ -11,6 +11,7 @@ pub fn init_db(db_path: &Path) -> Result<DbPool> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     create_tables(&conn)?;
+    migrate_entreprises(&conn)?;
     seed_default_settings(&conn)?;
     Ok(Arc::new(Mutex::new(conn)))
 }
@@ -52,6 +53,12 @@ fn create_tables(conn: &Connection) -> Result<()> {
             adresse TEXT,
             code_postal TEXT,
             ville TEXT,
+            nature_juridique TEXT,
+            date_creation TEXT,
+            nombre_etablissements INTEGER,
+            dirigeants TEXT,
+            chiffre_affaires REAL,
+            resultat_net REAL,
             date_maj DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -100,6 +107,21 @@ fn create_tables(conn: &Connection) -> Result<()> {
         );
         "
     )?;
+    Ok(())
+}
+
+fn migrate_entreprises(conn: &Connection) -> Result<()> {
+    let new_cols = [
+        ("nature_juridique", "TEXT"),
+        ("date_creation", "TEXT"),
+        ("nombre_etablissements", "INTEGER"),
+        ("dirigeants", "TEXT"),
+        ("chiffre_affaires", "REAL"),
+        ("resultat_net", "REAL"),
+    ];
+    for (col, typ) in &new_cols {
+        let _ = conn.execute(&format!("ALTER TABLE entreprises ADD COLUMN {} {}", col, typ), []);
+    }
     Ok(())
 }
 
@@ -341,17 +363,26 @@ pub fn upsert_entreprise(db: &DbPool, e: &Entreprise) -> Result<()> {
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO entreprises (siren, siret, nom, code_ape, libelle_ape, tranche_effectifs,
-         categorie_entreprise, adresse, code_postal, ville)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         categorie_entreprise, adresse, code_postal, ville,
+         nature_juridique, date_creation, nombre_etablissements, dirigeants, chiffre_affaires, resultat_net)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(siren) DO UPDATE SET
             siret=excluded.siret, nom=excluded.nom, code_ape=excluded.code_ape,
             libelle_ape=excluded.libelle_ape, tranche_effectifs=excluded.tranche_effectifs,
             categorie_entreprise=excluded.categorie_entreprise, adresse=excluded.adresse,
             code_postal=excluded.code_postal, ville=excluded.ville,
+            nature_juridique=COALESCE(excluded.nature_juridique, entreprises.nature_juridique),
+            date_creation=COALESCE(excluded.date_creation, entreprises.date_creation),
+            nombre_etablissements=COALESCE(excluded.nombre_etablissements, entreprises.nombre_etablissements),
+            dirigeants=COALESCE(excluded.dirigeants, entreprises.dirigeants),
+            chiffre_affaires=COALESCE(excluded.chiffre_affaires, entreprises.chiffre_affaires),
+            resultat_net=COALESCE(excluded.resultat_net, entreprises.resultat_net),
             date_maj=CURRENT_TIMESTAMP",
         params![
             e.siren, e.siret, e.nom, e.code_ape, e.libelle_ape,
             e.tranche_effectifs, e.categorie_entreprise, e.adresse, e.code_postal, e.ville,
+            e.nature_juridique, e.date_creation, e.nombre_etablissements, e.dirigeants,
+            e.chiffre_affaires, e.resultat_net,
         ],
     )?;
     Ok(())
@@ -374,7 +405,9 @@ pub fn search_entreprises(db: &DbPool, codes_ape: &[String], tranches: &[String]
 
     let sql = format!(
         "SELECT siren, siret, nom, code_ape, libelle_ape, tranche_effectifs,
-                categorie_entreprise, adresse, code_postal, ville
+                categorie_entreprise, adresse, code_postal, ville,
+                nature_juridique, date_creation, nombre_etablissements, dirigeants,
+                chiffre_affaires, resultat_net
          FROM entreprises WHERE {} AND {} ORDER BY nom LIMIT 500",
         ape_filter, tranche_filter
     );
@@ -391,6 +424,12 @@ pub fn search_entreprises(db: &DbPool, codes_ape: &[String], tranches: &[String]
             adresse: row.get(7)?,
             code_postal: row.get(8)?,
             ville: row.get(9)?,
+            nature_juridique: row.get(10)?,
+            date_creation: row.get(11)?,
+            nombre_etablissements: row.get(12)?,
+            dirigeants: row.get(13)?,
+            chiffre_affaires: row.get(14)?,
+            resultat_net: row.get(15)?,
         })
     })?;
     let mut results = Vec::new();
@@ -528,7 +567,9 @@ pub fn get_entreprises(db: &DbPool, limit: u32, offset: u32) -> Result<Vec<Entre
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
         "SELECT siren, siret, nom, code_ape, libelle_ape, tranche_effectifs,
-                categorie_entreprise, adresse, code_postal, ville
+                categorie_entreprise, adresse, code_postal, ville,
+                nature_juridique, date_creation, nombre_etablissements, dirigeants,
+                chiffre_affaires, resultat_net
          FROM entreprises ORDER BY nom LIMIT ?1 OFFSET ?2"
     )?;
     let rows = stmt.query_map(params![limit, offset], |row| {
@@ -543,6 +584,12 @@ pub fn get_entreprises(db: &DbPool, limit: u32, offset: u32) -> Result<Vec<Entre
             adresse: row.get(7)?,
             code_postal: row.get(8)?,
             ville: row.get(9)?,
+            nature_juridique: row.get(10)?,
+            date_creation: row.get(11)?,
+            nombre_etablissements: row.get(12)?,
+            dirigeants: row.get(13)?,
+            chiffre_affaires: row.get(14)?,
+            resultat_net: row.get(15)?,
         })
     })?;
     let mut results = Vec::new();
