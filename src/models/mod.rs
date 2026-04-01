@@ -14,6 +14,12 @@ pub struct Entreprise {
     pub adresse: Option<String>,
     pub code_postal: Option<String>,
     pub ville: Option<String>,
+    pub nature_juridique: Option<String>,
+    pub date_creation: Option<String>,
+    pub nombre_etablissements: Option<u32>,
+    pub dirigeants: Option<String>,
+    pub chiffre_affaires: Option<f64>,
+    pub resultat_net: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

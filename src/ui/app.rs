@@ -133,6 +133,7 @@ pub struct MyCommercialApp {
     pub search_effectifs: usize, // index into TrancheEffectifs::all(), 0 = Tous
     pub search_contacts: Vec<Contact>,
     pub search_loading: bool,
+    pub selected_entreprise: Option<Entreprise>,
 
     // Contacts
     pub contacts: Vec<Contact>,
@@ -224,6 +225,7 @@ impl MyCommercialApp {
             search_effectifs: 0,
             search_contacts: vec![],
             search_loading: false,
+            selected_entreprise: None,
             contacts, contacts_page: 0, _contact_selected: None,
             messages, messages_page: 0, message_selected: None,
             solutions, solution_selected: None,

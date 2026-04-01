@@ -33,6 +33,25 @@ struct RechercheEntreprise {
     tranche_effectif_salarie: Option<String>,
     categorie_entreprise: Option<String>,
     nature_juridique: Option<String>,
+    date_creation: Option<String>,
+    nombre_etablissements: Option<u32>,
+    dirigeants: Option<Vec<RechercheDir>>,
+    finances: Option<std::collections::HashMap<String, RechercheFinance>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RechercheDir {
+    nom: Option<String>,
+    prenoms: Option<String>,
+    qualite: Option<String>,
+    denomination: Option<String>,
+    type_dirigeant: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RechercheFinance {
+    ca: Option<f64>,
+    resultat_net: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +235,29 @@ impl DataGouvClient {
                 .and_then(|s| s.libelle_activite_principale.clone())
                 .unwrap_or_default();
 
+            // Format dirigeants
+            let dirigeants = r.dirigeants.as_ref().map(|dirs| {
+                dirs.iter().filter_map(|d| {
+                    if d.type_dirigeant.as_deref() == Some("personne physique") {
+                        let nom = d.nom.as_deref().unwrap_or("");
+                        let prenoms = d.prenoms.as_deref().unwrap_or("");
+                        let qualite = d.qualite.as_deref().unwrap_or("");
+                        Some(format!("{} {} ({})", prenoms, nom, qualite))
+                    } else {
+                        d.denomination.as_ref().map(|den| {
+                            let qualite = d.qualite.as_deref().unwrap_or("");
+                            format!("{} ({})", den, qualite)
+                        })
+                    }
+                }).collect::<Vec<_>>().join(" | ")
+            }).filter(|s| !s.is_empty());
+
+            // Dernière année financière
+            let (ca, resultat) = r.finances.as_ref()
+                .and_then(|f| f.iter().max_by_key(|(k, _)| (*k).clone()))
+                .map(|(_, fin)| (fin.ca, fin.resultat_net))
+                .unwrap_or((None, None));
+
             Entreprise {
                 siren: r.siren.unwrap_or_default(),
                 siret: siege.and_then(|s| s.siret.clone()),
@@ -227,6 +269,12 @@ impl DataGouvClient {
                 adresse: siege.and_then(|s| s.adresse.clone()),
                 code_postal: siege.and_then(|s| s.code_postal.clone()),
                 ville: siege.and_then(|s| s.libelle_commune.clone()),
+                nature_juridique: r.nature_juridique,
+                date_creation: r.date_creation,
+                nombre_etablissements: r.nombre_etablissements,
+                dirigeants,
+                chiffre_affaires: ca,
+                resultat_net: resultat,
             }
         }).collect();
 
@@ -310,6 +358,12 @@ impl DataGouvClient {
                 adresse: None,
                 code_postal: None,
                 ville: None,
+                nature_juridique: None,
+                date_creation: None,
+                nombre_etablissements: None,
+                dirigeants: None,
+                chiffre_affaires: None,
+                resultat_net: None,
             }
         }).collect();
 
@@ -380,6 +434,12 @@ impl DataGouvClient {
             adresse,
             code_postal,
             ville,
+            nature_juridique: None,
+            date_creation: None,
+            nombre_etablissements: None,
+            dirigeants: None,
+            chiffre_affaires: None,
+            resultat_net: None,
         };
 
         db::upsert_entreprise(&self.db, &entreprise)?;
