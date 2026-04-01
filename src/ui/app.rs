@@ -437,8 +437,15 @@ impl MyCommercialApp {
                         return;
                     }
                     let title = postes.first().map(|s| s.as_str()).unwrap_or("CEO");
-                    match client.search_people(&q, title, None, 0, 25).await {
-                        Ok(c) => Self::send_msg(&tx, &ctx, AppMessage::LinkedInResults(c)),
+                    match client.search_people_debug(&q, title, None, 0, 25).await {
+                        Ok((c, debug_info)) => {
+                            if c.is_empty() {
+                                Self::send_msg(&tx, &ctx, AppMessage::Info(
+                                    format!("LinkedIn: 0 résultat pour '{}'. Debug: {}", q, debug_info)
+                                ));
+                            }
+                            Self::send_msg(&tx, &ctx, AppMessage::LinkedInResults(c));
+                        }
                         Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
                     }
                 }
