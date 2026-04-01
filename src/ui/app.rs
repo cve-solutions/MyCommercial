@@ -392,7 +392,9 @@ impl MyCommercialApp {
     }
 
     pub fn launch_search_entreprises_page(&mut self, page: u32) {
-        if self.search_query.is_empty() { return; }
+        if self.search_query.is_empty() && self.search_code_ape.is_empty() && self.search_effectifs == 0 {
+            return;
+        }
         self.search_loading = true;
         self.search_entreprises_page = page;
         let tx = self.tx.clone();
