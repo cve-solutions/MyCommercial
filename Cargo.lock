@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "mycommercial"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "chrono",
