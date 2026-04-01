@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::models::{Contact, MessageStatus};
 use crate::settings::SettingsManager;
 
-/// Client Odoo CRM via JSON-RPC
+/// Client Odoo CRM via JSON-RPC (compatible Odoo 14-19)
 pub struct OdooClient {
     client: Client,
     url: String,
@@ -40,11 +40,14 @@ struct JsonRpcError {
 impl OdooClient {
     pub fn new(settings: &SettingsManager) -> Self {
         Self {
-            client: Client::new(),
-            url: settings.odoo_url(),
-            database: settings.get_or_default("odoo", "database", ""),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+            url: settings.odoo_url().trim().trim_end_matches('/').to_string(),
+            database: settings.get_or_default("odoo", "database", "").trim().to_string(),
             uid: None,
-            username: settings.get_or_default("odoo", "username", ""),
+            username: settings.get_or_default("odoo", "username", "").trim().to_string(),
             password: settings.get_or_default("odoo", "password", ""),
             enabled: settings.odoo_enabled(),
         }
@@ -54,58 +57,93 @@ impl OdooClient {
         self.enabled
     }
 
-    /// Authentification via JSON-RPC
-    pub async fn authenticate(&mut self) -> Result<()> {
-        if !self.enabled {
-            anyhow::bail!("Intégration Odoo désactivée");
-        }
-
-        if self.url.is_empty() || self.database.is_empty() || self.username.is_empty() {
-            anyhow::bail!("Configuration Odoo incomplète (url, database et username requis)");
-        }
-
-        let url = format!("{}/jsonrpc", self.url);
-
+    /// Envoi d'une requête JSON-RPC à Odoo
+    async fn rpc(&self, endpoint: &str, params: Value) -> Result<JsonRpcResponse> {
+        let url = format!("{}{}", self.url, endpoint);
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "call".to_string(),
             id: 1,
-            params: serde_json::json!({
-                "service": "common",
-                "method": "authenticate",
-                "args": [&self.database, &self.username, &self.password, {}]
-            }),
+            params,
         };
 
         let resp = self.client
             .post(&url)
-            .timeout(std::time::Duration::from_secs(10))
+            .header("Content-Type", "application/json")
+            .json(&request)
             .send()
             .await
-            .context(format!("Impossible de se connecter à Odoo sur {} (vérifiez l'URL, le port et que le serveur est accessible)", url))?;
+            .context(format!("Connexion impossible à {} — vérifiez URL et réseau", url))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Odoo HTTP {}: {}", status, body);
+            anyhow::bail!("Odoo HTTP {} sur {}: {}", status, url,
+                if body.len() > 200 { &body[..200] } else { &body });
         }
 
-        let data: JsonRpcResponse = resp.json().await
-            .context("Erreur parsing réponse Odoo (la réponse n'est pas du JSON-RPC valide)")?;
+        resp.json().await
+            .context("Réponse Odoo invalide (pas du JSON-RPC)")
+    }
 
-        if let Some(error) = data.error {
-            let detail = error.data
+    /// Extraction d'erreur JSON-RPC
+    fn check_error(data: &JsonRpcResponse) -> Result<()> {
+        if let Some(ref error) = data.error {
+            let msg = error.message.as_deref().unwrap_or("Inconnue");
+            let detail = error.data.as_ref()
+                .and_then(|d| d.get("message").and_then(|m| m.as_str()))
                 .map(|d| format!(" — {}", d))
                 .unwrap_or_default();
-            anyhow::bail!("Erreur Odoo: {}{}", error.message.unwrap_or_else(|| "Inconnue".into()), detail);
+            anyhow::bail!("Erreur Odoo: {}{}", msg, detail);
+        }
+        Ok(())
+    }
+
+    /// Authentification (compatible Odoo 14-19)
+    pub async fn authenticate(&mut self) -> Result<()> {
+        if !self.enabled {
+            anyhow::bail!("Intégration Odoo désactivée");
+        }
+        if self.url.is_empty() || self.database.is_empty() || self.username.is_empty() {
+            anyhow::bail!("Configuration Odoo incomplète (url, database et username requis)");
         }
 
-        self.uid = data.result.and_then(|v| v.as_i64());
+        // Odoo 17+/19: /web/session/authenticate
+        let data = self.rpc("/web/session/authenticate", serde_json::json!({
+            "db": &self.database,
+            "login": &self.username,
+            "password": &self.password,
+        })).await?;
+
+        Self::check_error(&data)?;
+
+        self.uid = data.result.as_ref()
+            .and_then(|v| v.get("uid").and_then(|u| u.as_i64()));
+
         if self.uid.is_none() {
-            anyhow::bail!("Authentification Odoo échouée: identifiants incorrects (database='{}', user='{}')", self.database, self.username);
+            anyhow::bail!(
+                "Authentification échouée (database='{}', user='{}') — vérifiez vos identifiants",
+                self.database, self.username
+            );
         }
 
         Ok(())
+    }
+
+    /// Appel ORM via /web/dataset/call_kw (Odoo 17+/19)
+    async fn call_kw(&self, model: &str, method: &str, args: Value, kwargs: Value) -> Result<Value> {
+        let uid = self.uid.context("Non authentifié. Appelez authenticate() d'abord.")?;
+        let _ = uid; // uid is in the session cookie after authenticate
+
+        let data = self.rpc("/web/dataset/call_kw", serde_json::json!({
+            "model": model,
+            "method": method,
+            "args": args,
+            "kwargs": kwargs,
+        })).await?;
+
+        Self::check_error(&data)?;
+        data.result.context("Pas de résultat dans la réponse Odoo")
     }
 
     /// Crée un lead/opportunité dans le CRM Odoo
@@ -119,9 +157,6 @@ impl OdooClient {
             anyhow::bail!("Intégration Odoo désactivée");
         }
 
-        let uid = self.uid.context("Non authentifié. Appelez authenticate() d'abord.")?;
-        let url = format!("{}/jsonrpc", self.url);
-
         let lead_data = serde_json::json!({
             "name": format!("Prospection {} {} - {}", contact.prenom, contact.nom, solution_name),
             "contact_name": format!("{} {}", contact.prenom, contact.nom),
@@ -133,40 +168,13 @@ impl OdooClient {
             "email_from": contact.email.as_deref().unwrap_or(""),
         });
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            method: "call".to_string(),
-            id: 2,
-            params: serde_json::json!({
-                "service": "object",
-                "method": "execute_kw",
-                "args": [
-                    &self.database,
-                    uid,
-                    &self.password,
-                    "crm.lead",
-                    "create",
-                    [lead_data]
-                ]
-            }),
-        };
+        let result = self.call_kw(
+            "crm.lead", "create",
+            serde_json::json!([lead_data]),
+            serde_json::json!({}),
+        ).await?;
 
-        let resp = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("Erreur création lead Odoo")?;
-
-        let data: JsonRpcResponse = resp.json().await?;
-
-        if let Some(error) = data.error {
-            anyhow::bail!("Erreur Odoo: {}", error.message.unwrap_or_else(|| "Inconnue".into()));
-        }
-
-        data.result
-            .and_then(|v| v.as_i64())
-            .context("ID du lead non reçu")
+        result.as_i64().context("ID du lead non reçu")
     }
 
     /// Met à jour le stage d'un lead (Intéressé/KO)
@@ -179,9 +187,6 @@ impl OdooClient {
             return Ok(());
         }
 
-        let uid = self.uid.context("Non authentifié")?;
-        let url = format!("{}/jsonrpc", self.url);
-
         let probability = match status {
             MessageStatus::Interested => 70.0,
             MessageStatus::Replied => 30.0,
@@ -192,38 +197,14 @@ impl OdooClient {
 
         let active = !matches!(status, MessageStatus::NotInterested);
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            method: "call".to_string(),
-            id: 3,
-            params: serde_json::json!({
-                "service": "object",
-                "method": "execute_kw",
-                "args": [
-                    &self.database,
-                    uid,
-                    &self.password,
-                    "crm.lead",
-                    "write",
-                    [[lead_id], {
-                        "probability": probability,
-                        "active": active,
-                    }]
-                ]
-            }),
-        };
-
-        let resp = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("Erreur mise à jour lead Odoo")?;
-
-        let data: JsonRpcResponse = resp.json().await?;
-        if let Some(error) = data.error {
-            anyhow::bail!("Erreur Odoo: {}", error.message.unwrap_or_else(|| "Inconnue".into()));
-        }
+        self.call_kw(
+            "crm.lead", "write",
+            serde_json::json!([[lead_id], {
+                "probability": probability,
+                "active": active,
+            }]),
+            serde_json::json!({}),
+        ).await?;
 
         Ok(())
     }
@@ -238,34 +219,18 @@ impl OdooClient {
             return Ok(());
         }
 
-        let uid = self.uid.context("Non authentifié")?;
-        let url = format!("{}/jsonrpc", self.url);
+        self.call_kw(
+            "mail.message", "create",
+            serde_json::json!([{
+                "model": "crm.lead",
+                "res_id": lead_id,
+                "body": note,
+                "message_type": "comment",
+                "subtype_xmlid": "mail.mt_note",
+            }]),
+            serde_json::json!({}),
+        ).await?;
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            method: "call".to_string(),
-            id: 4,
-            params: serde_json::json!({
-                "service": "object",
-                "method": "execute_kw",
-                "args": [
-                    &self.database,
-                    uid,
-                    &self.password,
-                    "mail.message",
-                    "create",
-                    [{
-                        "model": "crm.lead",
-                        "res_id": lead_id,
-                        "body": note,
-                        "message_type": "comment",
-                        "subtype_xmlid": "mail.mt_note",
-                    }]
-                ]
-            }),
-        };
-
-        self.client.post(&url).json(&request).send().await?;
         Ok(())
     }
 }
