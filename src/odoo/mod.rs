@@ -60,6 +60,10 @@ impl OdooClient {
             anyhow::bail!("Intégration Odoo désactivée");
         }
 
+        if self.url.is_empty() || self.database.is_empty() || self.username.is_empty() {
+            anyhow::bail!("Configuration Odoo incomplète (url, database et username requis)");
+        }
+
         let url = format!("{}/jsonrpc", self.url);
 
         let request = JsonRpcRequest {
@@ -75,21 +79,30 @@ impl OdooClient {
 
         let resp = self.client
             .post(&url)
-            .json(&request)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .context("Impossible de se connecter à Odoo")?;
+            .context(format!("Impossible de se connecter à Odoo sur {} (vérifiez l'URL, le port et que le serveur est accessible)", url))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Odoo HTTP {}: {}", status, body);
+        }
 
         let data: JsonRpcResponse = resp.json().await
-            .context("Erreur parsing réponse Odoo")?;
+            .context("Erreur parsing réponse Odoo (la réponse n'est pas du JSON-RPC valide)")?;
 
         if let Some(error) = data.error {
-            anyhow::bail!("Erreur Odoo: {}", error.message.unwrap_or_else(|| "Inconnue".into()));
+            let detail = error.data
+                .map(|d| format!(" — {}", d))
+                .unwrap_or_default();
+            anyhow::bail!("Erreur Odoo: {}{}", error.message.unwrap_or_else(|| "Inconnue".into()), detail);
         }
 
         self.uid = data.result.and_then(|v| v.as_i64());
         if self.uid.is_none() {
-            anyhow::bail!("Authentification Odoo échouée: UID non reçu");
+            anyhow::bail!("Authentification Odoo échouée: identifiants incorrects (database='{}', user='{}')", self.database, self.username);
         }
 
         Ok(())
