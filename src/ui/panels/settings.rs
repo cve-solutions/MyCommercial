@@ -48,7 +48,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                     ui.separator();
                     ui.add_space(5.0);
 
-                    // ── LinkedIn OAuth2 ──
+                    // ── LinkedIn ──
                     ui.label(theme::subheading("LinkedIn"));
                     if app.linkedin_oauth_in_progress {
                         ui.horizontal(|ui| {
@@ -56,9 +56,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                             ui.label(egui::RichText::new("Connexion...").color(theme::WARNING).small());
                         });
                     } else {
+                        let has_cookie = !app.settings.get_or_default("linkedin", "cookie_li_at", "").is_empty();
                         let has_token = !app.settings.get_or_default("linkedin", "access_token", "").is_empty();
-                        if has_token {
-                            ui.label(egui::RichText::new("\u{2714} Connecté").color(theme::SUCCESS).small());
+                        if has_cookie {
+                            ui.label(egui::RichText::new("\u{2714} Cookie li_at OK").color(theme::SUCCESS).small());
+                        } else if has_token {
+                            ui.label(egui::RichText::new("\u{2714} OAuth2 OK").color(theme::SUCCESS).small());
+                        }
+                        if ui.button("\u{1f510} Auto-login (email/mdp)").clicked() {
+                            app.launch_linkedin_login();
                         }
                         if ui.button("\u{1f517} Se connecter (OAuth2)").clicked() {
                             app.launch_linkedin_oauth2();

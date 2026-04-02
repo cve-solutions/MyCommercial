@@ -397,6 +397,85 @@ queryParameters:(resultType:List(PEOPLE)))\
         })
     }
 
+    /// Login LinkedIn avec email/password et retourne le cookie li_at
+    pub async fn login_get_cookie(email: &str, password: &str) -> Result<String> {
+        let http_client = reqwest::Client::builder()
+            .cookie_store(true)
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .build()
+            .context("Erreur création client HTTP")?;
+
+        // Step 1: GET login page to extract CSRF token
+        let login_page = http_client
+            .get("https://www.linkedin.com/login")
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Impossible d'accéder à la page de login LinkedIn")?;
+
+        let login_html = login_page.text().await.unwrap_or_default();
+
+        // Extract loginCsrfParam from HTML
+        let csrf_token = login_html
+            .split("loginCsrfParam")
+            .nth(1)
+            .and_then(|s| s.split("value=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .context("CSRF token introuvable sur la page de login LinkedIn")?
+            .to_string();
+
+        // Step 2: POST login form
+        let login_resp = http_client
+            .post("https://www.linkedin.com/checkpoint/lg/login-submit")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Referer", "https://www.linkedin.com/login")
+            .header("Origin", "https://www.linkedin.com")
+            .form(&[
+                ("session_key", email),
+                ("session_password", password),
+                ("loginCsrfParam", &csrf_token),
+            ])
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Erreur lors du login LinkedIn")?;
+
+        // Step 3: Extract li_at from cookies
+        let li_at = login_resp.cookies()
+            .find(|c| c.name() == "li_at")
+            .map(|c| c.value().to_string());
+
+        // If not in this response, try fetching the feed (redirects may set the cookie)
+        if let Some(token) = li_at {
+            return Ok(token);
+        }
+
+        // Try getting it from a follow-up request
+        let feed_resp = http_client
+            .get("https://www.linkedin.com/feed/")
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Erreur accès feed LinkedIn après login")?;
+
+        let li_at = feed_resp.cookies()
+            .find(|c| c.name() == "li_at")
+            .map(|c| c.value().to_string());
+
+        if let Some(token) = li_at {
+            return Ok(token);
+        }
+
+        // Check if login failed (challenge, 2FA, captcha)
+        let resp_url = feed_resp.url().to_string();
+        if resp_url.contains("checkpoint") || resp_url.contains("challenge") {
+            anyhow::bail!("LinkedIn demande une vérification (2FA/captcha). Connectez-vous manuellement dans un navigateur puis copiez le cookie li_at.");
+        }
+
+        anyhow::bail!("Cookie li_at non obtenu. Vérifiez vos identifiants LinkedIn (email/mot de passe).");
+    }
+
     fn voyager_request(&self, client: &reqwest::Client, method: reqwest::Method, url: &str) -> Result<reqwest::RequestBuilder> {
         let cookie = self.cookie_li_at.as_ref()
             .context("LinkedIn nécessite le cookie li_at.")?;
