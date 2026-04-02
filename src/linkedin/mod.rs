@@ -1,5 +1,6 @@
 use anyhow::{Result, Context};
 use reqwest::Client;
+use reqwest::cookie::CookieStore;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -372,9 +373,10 @@ queryParameters:(resultType:List(PEOPLE)))\
 
     /// Login LinkedIn avec email/password et retourne le cookie li_at
     pub async fn login_get_cookie(email: &str, password: &str) -> Result<String> {
+        let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
         let http_client = reqwest::Client::builder()
-            .cookie_store(true)
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .cookie_provider(jar.clone())
+            .redirect(reqwest::redirect::Policy::limited(10))
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .build()
             .context("Erreur création client HTTP")?;
@@ -399,7 +401,7 @@ queryParameters:(resultType:List(PEOPLE)))\
             .to_string();
 
         // Step 2: POST login form
-        let login_resp = http_client
+        let _login_resp = http_client
             .post("https://www.linkedin.com/checkpoint/lg/login-submit")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Referer", "https://www.linkedin.com/login")
@@ -407,46 +409,60 @@ queryParameters:(resultType:List(PEOPLE)))\
             .form(&[
                 ("session_key", email),
                 ("session_password", password),
-                ("loginCsrfParam", &csrf_token),
+                ("loginCsrfParam", csrf_token.as_str()),
             ])
-            .timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
             .context("Erreur lors du login LinkedIn")?;
 
-        // Step 3: Extract li_at from cookies
-        let li_at = login_resp.cookies()
-            .find(|c| c.name() == "li_at")
-            .map(|c| c.value().to_string());
+        // Step 3: Check cookie jar for li_at
+        let linkedin_url = reqwest::Url::parse("https://www.linkedin.com").unwrap();
+        let cookies_str = jar.cookies(&linkedin_url)
+            .map(|h| h.to_str().unwrap_or("").to_string())
+            .unwrap_or_default();
 
-        // If not in this response, try fetching the feed (redirects may set the cookie)
-        if let Some(token) = li_at {
-            return Ok(token);
+        // Parse li_at from cookie string "li_at=ABC; other=DEF"
+        if let Some(li_at) = Self::extract_cookie_value(&cookies_str, "li_at") {
+            return Ok(li_at);
         }
 
-        // Try getting it from a follow-up request
-        let feed_resp = http_client
+        // Step 4: Try accessing feed to trigger more cookie setting
+        let _feed_resp = http_client
             .get("https://www.linkedin.com/feed/")
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
             .context("Erreur accès feed LinkedIn après login")?;
 
-        let li_at = feed_resp.cookies()
-            .find(|c| c.name() == "li_at")
-            .map(|c| c.value().to_string());
+        let cookies_str = jar.cookies(&linkedin_url)
+            .map(|h| h.to_str().unwrap_or("").to_string())
+            .unwrap_or_default();
 
-        if let Some(token) = li_at {
-            return Ok(token);
+        if let Some(li_at) = Self::extract_cookie_value(&cookies_str, "li_at") {
+            return Ok(li_at);
         }
 
-        // Check if login failed (challenge, 2FA, captcha)
-        let resp_url = feed_resp.url().to_string();
+        // Check if login failed
+        let resp_url = _feed_resp.url().to_string();
         if resp_url.contains("checkpoint") || resp_url.contains("challenge") {
-            anyhow::bail!("LinkedIn demande une vérification (2FA/captcha). Connectez-vous manuellement dans un navigateur puis copiez le cookie li_at.");
+            anyhow::bail!("LinkedIn demande une vérification (2FA/captcha). Connectez-vous dans un navigateur puis copiez le cookie li_at manuellement.");
+        }
+        if resp_url.contains("login") {
+            anyhow::bail!("Identifiants LinkedIn incorrects (redirigé vers login).");
         }
 
-        anyhow::bail!("Cookie li_at non obtenu. Vérifiez vos identifiants LinkedIn (email/mot de passe).");
+        anyhow::bail!("Cookie li_at non obtenu. Cookies reçus: {} — URL finale: {}",
+            if cookies_str.len() > 100 { &cookies_str[..100] } else { &cookies_str },
+            resp_url);
+    }
+
+    fn extract_cookie_value(cookies_str: &str, name: &str) -> Option<String> {
+        let prefix = format!("{}=", name);
+        cookies_str.split("; ")
+            .find(|c| c.starts_with(&prefix))
+            .map(|c| c[prefix.len()..].to_string())
+            .filter(|v| !v.is_empty() && v != "\"\"")
     }
 
     fn voyager_request(&self, client: &reqwest::Client, method: reqwest::Method, url: &str) -> Result<reqwest::RequestBuilder> {
