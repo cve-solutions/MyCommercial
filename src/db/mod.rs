@@ -164,7 +164,8 @@ fn seed_default_settings(conn: &Connection) -> Result<()> {
         // Prospection
         ("prospection", "postes_cibles", "CEO,CTO,RSSI,DSI,DG,PDG,Directeur Technique,Directeur Informatique,CISO", "Postes ciblés (séparés par virgule)", "text"),
         ("prospection", "tranches_effectifs", "12,21,22,31,32,41", "Tranches d'effectifs ciblées", "text"),
-        ("prospection", "message_template", "Bonjour {prenom},\n\nJe me permets de vous contacter car {solution_resume}\n\nSeriez-vous disponible pour un échange rapide ?\n\nCordialement", "Template de message par défaut", "text"),
+        ("prospection", "message_template", "Bonjour {prenom},\n\nJe me permets de vous contacter car {solution_resume}\n\nSeriez-vous disponible pour un échange rapide ?\n\nCordialement,\nCyrille VERGER\n0787080801\nGoverbyte", "Template de message par défaut", "text"),
+        ("prospection", "signature", "Seriez-vous disponible pour un échange rapide ?\n\nCordialement,\nCyrille VERGER\n0787080801\nGoverbyte", "Signature obligatoire en fin de message", "text"),
 
         // Application
         ("app", "font_size", "14", "Taille des caractères (10-30)", "number"),

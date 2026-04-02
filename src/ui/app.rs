@@ -602,11 +602,12 @@ impl MyCommercialApp {
         let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         let tmpl = self.settings.message_template();
+        let signature = self.settings.get_or_default("prospection", "signature", "");
         self.runtime_handle.spawn(async move {
             let c = OllamaClient::new(&s);
             let cid = contact.id.unwrap_or(0);
             match c.generate_prospection_message(&contact.prenom, &contact.poste,
-                contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl).await {
+                contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl, &signature).await {
                 Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::MessageGenerated { contact_id: cid, message: m }),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }

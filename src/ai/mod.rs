@@ -183,17 +183,27 @@ impl OllamaClient {
         entreprise_nom: &str,
         solution_resume: &str,
         template: &str,
+        signature: &str,
     ) -> Result<String> {
         let prompt = format!(
             "Personnalise le message de prospection suivant pour :\n\
              - Prénom: {}\n- Poste: {}\n- Entreprise: {}\n- Solution: {}\n\n\
              Template:\n{}\n\n\
+             IMPORTANT: Le message DOIT obligatoirement se terminer par cette signature exacte (ne la modifie pas):\n{}\n\n\
              Génère un message professionnel, personnalisé et engageant. \
-             Garde un ton courtois et direct. Maximum 500 caractères.",
-            contact_prenom, contact_poste, entreprise_nom, solution_resume, template
+             Garde un ton courtois et direct. Maximum 500 caractères (hors signature).",
+            contact_prenom, contact_poste, entreprise_nom, solution_resume, template, signature
         );
 
-        self.generate(&prompt).await
+        let mut msg = self.generate(&prompt).await?;
+
+        // Ensure signature is at the end
+        if !signature.is_empty() && !msg.contains(signature.lines().next().unwrap_or("")) {
+            msg.push_str("\n\n");
+            msg.push_str(signature);
+        }
+
+        Ok(msg)
     }
 
     /// Appel générique à Ollama
