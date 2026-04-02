@@ -15,6 +15,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             ui.set_max_width(200.0);
             ui.set_min_height(panel_height);
             egui::ScrollArea::vertical()
+                .id_salt("settings_categories_scroll")
                 .max_height(panel_height)
                 .show(ui, |ui| {
                 ui.group(|ui| {
@@ -169,7 +170,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             }
 
             let available = (panel_height - 10.0).max(100.0);
-            egui::ScrollArea::vertical().max_height(available).show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("settings_params_scroll")
+                .max_height(available)
+                .show(ui, |ui| {
                 let mut edit_action: Option<(String, String)> = None;
 
                 for (key, value, desc, vtype) in &app.settings_items {
