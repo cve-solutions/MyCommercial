@@ -1,132 +1,187 @@
 use anyhow::{Result, Context};
 use reqwest::Client;
-use reqwest::cookie::CookieStore;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::models::{Contact, LinkedInAuthMethod};
 use crate::settings::SettingsManager;
 
-/// Client LinkedIn supportant plusieurs méthodes d'authentification
+/// Client LinkedIn — utilise linkedin-api (Python) pour search/send
 pub struct LinkedInClient {
     client: Client,
     auth_method: LinkedInAuthMethod,
     access_token: Option<String>,
-    cookie_li_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LinkedInSearchResponse {
-    elements: Option<Vec<LinkedInProfile>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LinkedInProfile {
-    #[serde(rename = "publicIdentifier")]
-    public_identifier: Option<String>,
-    #[serde(rename = "firstName")]
-    first_name: Option<String>,
-    #[serde(rename = "lastName")]
-    last_name: Option<String>,
-    headline: Option<String>,
-    #[serde(rename = "profileUrl")]
-    profile_url: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct LinkedInMessage {
-    recipients: Vec<String>,
-    subject: Option<String>,
-    body: String,
+    login_email: String,
+    login_password: String,
 }
 
 impl LinkedInClient {
     pub fn new(settings: &SettingsManager) -> Result<Self> {
         let auth_method = LinkedInAuthMethod::from_db(&settings.linkedin_auth_method());
         let access_token = settings.get("linkedin", "access_token").ok().filter(|s| !s.is_empty());
-        let cookie_li_at = settings.get("linkedin", "cookie_li_at").ok().filter(|s| !s.is_empty());
 
         Ok(Self {
             client: Client::new(),
             auth_method,
             access_token,
-            cookie_li_at,
+            login_email: settings.get_or_default("linkedin", "login_email", ""),
+            login_password: settings.get_or_default("linkedin", "login_password", ""),
         })
     }
 
     pub fn is_authenticated(&self) -> bool {
-        self.cookie_li_at.is_some() || self.access_token.is_some()
+        (!self.login_email.is_empty() && !self.login_password.is_empty())
+            || self.access_token.is_some()
     }
 
-    /// Recherche des profils LinkedIn via Voyager API (nécessite cookie li_at)
+    /// Find the Python bridge script path
+    fn bridge_path() -> Result<String> {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+        let candidates = vec![
+            exe_dir.as_ref().map(|d| d.join("../scripts/linkedin_bridge.py")),
+            exe_dir.as_ref().map(|d| d.join("scripts/linkedin_bridge.py")),
+            Some(std::path::PathBuf::from("scripts/linkedin_bridge.py")),
+            Some(std::path::PathBuf::from("linkedin_bridge.py")),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            if candidate.exists() {
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+        }
+
+        anyhow::bail!("Script linkedin_bridge.py introuvable. Vérifiez le dossier scripts/.")
+    }
+
+    /// Call the Python bridge with a JSON command
+    async fn bridge_call(&self, action: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        if self.login_email.is_empty() || self.login_password.is_empty() {
+            anyhow::bail!("Configurez login_email et login_password dans Settings > LinkedIn.");
+        }
+
+        let bridge = Self::bridge_path()?;
+
+        let input = serde_json::json!({
+            "action": action,
+            "email": &self.login_email,
+            "password": &self.login_password,
+            "params": params,
+        });
+
+        let input_str = serde_json::to_string(&input)?;
+
+        let output = tokio::process::Command::new("python3")
+            .arg(&bridge)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Impossible de lancer python3. Vérifiez que Python 3 est installé.")?
+            .wait_with_output()
+            .await
+            .map_err(|e| {
+                // Write stdin before waiting
+                anyhow::anyhow!("Erreur exécution bridge: {}", e)
+            })?;
+
+        // We need to pipe stdin properly
+        drop(output); // discard the above
+
+        let mut child = tokio::process::Command::new("python3")
+            .arg(&bridge)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Impossible de lancer python3")?;
+
+        if let Some(ref mut stdin) = child.stdin {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(input_str.as_bytes()).await?;
+            stdin.shutdown().await?;
+        }
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            child.wait_with_output(),
+        )
+        .await
+        .context("Timeout (60s) sur le bridge LinkedIn")?
+        .context("Erreur exécution bridge LinkedIn")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if stdout.trim().is_empty() {
+            let err_msg = if stderr.is_empty() {
+                "Pas de réponse du bridge LinkedIn".to_string()
+            } else {
+                format!("Bridge LinkedIn: {}", stderr.lines().last().unwrap_or(&stderr))
+            };
+            anyhow::bail!("{}", err_msg);
+        }
+
+        let result: serde_json::Value = serde_json::from_str(stdout.trim())
+            .context(format!("Réponse bridge invalide: {}", &stdout[..stdout.len().min(200)]))?;
+
+        if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+            anyhow::bail!("{}", err);
+        }
+
+        Ok(result)
+    }
+
+    /// Recherche des profils LinkedIn via linkedin-api (Python)
     pub async fn search_people(
         &self,
         keywords: &str,
-        title: &str,
-        company: Option<&str>,
+        _title: &str,
+        _company: Option<&str>,
         start: u32,
         count: u32,
     ) -> Result<Vec<Contact>> {
-        // Voyager API requires li_at cookie
-        let cookie = self.cookie_li_at.as_ref()
-            .context("Recherche LinkedIn nécessite le cookie li_at. Configurez-le dans Settings > LinkedIn.")?;
+        let result = self.bridge_call("search", serde_json::json!({
+            "keywords": keywords,
+            "limit": count,
+            "offset": start,
+        })).await?;
 
-        let url = format!(
-            "https://www.linkedin.com/voyager/api/search/dash/clusters\
-            ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
-            &origin=GLOBAL_SEARCH_HEADER\
-            &q=all\
-            &query=(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,\
-queryParameters:(resultType:List(PEOPLE)))\
-            &start={start}&count={count}",
-            keywords = urlencoding::encode(keywords),
-            start = start,
-            count = count,
-        );
+        let contacts = result.get("results")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter().filter_map(|item| {
+                    let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let parts: Vec<&str> = name.splitn(2, ' ').collect();
+                    let prenom = parts.first().unwrap_or(&"").to_string();
+                    let nom = parts.get(1).unwrap_or(&"").to_string();
+                    if prenom.is_empty() && nom.is_empty() { return None; }
 
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+                    let urn_id = item.get("urn_id").and_then(|u| u.as_str()).unwrap_or("").to_string();
+                    let public_id = item.get("public_id").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                    let jobtitle = item.get("jobtitle").and_then(|j| j.as_str()).unwrap_or("").to_string();
 
-        let resp = http_client
-            .get(&url)
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .context("Erreur de connexion à LinkedIn — vérifiez votre accès réseau et le cookie li_at")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                anyhow::bail!("Cookie li_at expiré ou invalide (HTTP {}). Reconnectez-vous à LinkedIn et mettez à jour le cookie.", status);
-            }
-            anyhow::bail!("LinkedIn error {} : {}", status,
-                if body.len() > 300 { &body[..300] } else { &body });
-        }
-
-        let body_text = resp.text().await
-            .context("Erreur lecture réponse LinkedIn")?;
-
-        let data: serde_json::Value = serde_json::from_str(&body_text)
-            .context("Erreur parsing JSON LinkedIn")?;
-
-        // Parse Voyager response
-        let mut contacts = Vec::new();
-        Self::parse_voyager_results(&data, &mut contacts, company);
+                    Some(Contact {
+                        id: None,
+                        linkedin_id: if !urn_id.is_empty() { Some(urn_id) } else if !public_id.is_empty() { Some(public_id.clone()) } else { None },
+                        prenom,
+                        nom,
+                        poste: jobtitle,
+                        entreprise_siren: None,
+                        entreprise_nom: None,
+                        linkedin_url: if !public_id.is_empty() { Some(format!("https://www.linkedin.com/in/{}", public_id)) } else { None },
+                        email: None,
+                    })
+                }).collect()
+            })
+            .unwrap_or_default();
 
         Ok(contacts)
     }
 
-    /// Même que search_people mais retourne aussi des infos de debug
+    /// Alias pour compatibilité
     pub async fn search_people_debug(
         &self,
         keywords: &str,
@@ -135,485 +190,79 @@ queryParameters:(resultType:List(PEOPLE)))\
         start: u32,
         count: u32,
     ) -> Result<(Vec<Contact>, String)> {
-        let cookie = self.cookie_li_at.as_ref()
-            .context("Recherche LinkedIn nécessite le cookie li_at.")?;
-
-        let url = format!(
-            "https://www.linkedin.com/voyager/api/search/dash/clusters\
-            ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
-            &origin=GLOBAL_SEARCH_HEADER\
-            &q=all\
-            &query=(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,\
-queryParameters:(resultType:List(PEOPLE)))\
-            &start={start}&count={count}",
-            keywords = urlencoding::encode(keywords),
-            start = start,
-            count = count,
-        );
-
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        let resp = http_client
-            .get(&url)
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .context("Erreur de connexion à LinkedIn")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LinkedIn error {}: {}", status, if body.len() > 300 { &body[..300] } else { &body });
-        }
-
-        let body_text = resp.text().await.unwrap_or_default();
-        let data: serde_json::Value = serde_json::from_str(&body_text)
-            .context("Erreur parsing JSON")?;
-
-        let mut contacts = Vec::new();
-        Self::parse_voyager_results(&data, &mut contacts, company);
-
-        // Build debug info
-        let keys: Vec<String> = data.as_object()
-            .map(|o| o.keys().cloned().collect())
-            .unwrap_or_default();
-        let el_count = data.get("elements").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
-        let inc_count = data.get("included").and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0);
-        let preview = if body_text.len() > 400 { &body_text[..400] } else { &body_text };
-        let debug = format!("keys={:?}, elements={}, included={}, body_preview={}", keys, el_count, inc_count, preview);
-
+        let contacts = self.search_people(keywords, title, company, start, count).await?;
+        let debug = format!("{} résultats via linkedin-api (Python)", contacts.len());
         Ok((contacts, debug))
     }
 
-    fn parse_voyager_results(data: &serde_json::Value, contacts: &mut Vec<Contact>, company: Option<&str>) {
-        // Format 1: data.elements (LinkedIn 2024+ normalized response)
-        if let Some(data_obj) = data.get("data") {
-            if let Some(elements) = data_obj.get("elements").and_then(|e| e.as_array()) {
-                for element in elements {
-                    if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
-                        for item in items {
-                            if let Some(contact) = Self::parse_entity_result(item, company) {
-                                contacts.push(contact);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Format 2: top-level elements (older format)
-        if contacts.is_empty() {
-            if let Some(elements) = data.get("elements").and_then(|e| e.as_array()) {
-                for element in elements {
-                    if let Some(items) = element.get("items").and_then(|i| i.as_array()) {
-                        for item in items {
-                            if let Some(contact) = Self::parse_entity_result(item, company) {
-                                contacts.push(contact);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Format 3: "included" array with profile objects
-        if contacts.is_empty() {
-            if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
-                for item in included {
-                    let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
-                    // Match various LinkedIn profile types
-                    if type_name.contains("Profile") || type_name.contains("MiniProfile")
-                        || type_name.contains("EntityResult") {
-                        if let Some(contact) = Self::parse_included_profile(item, company) {
-                            contacts.push(contact);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn parse_included_profile(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
-        // Try firstName/lastName (MiniProfile / Profile format)
-        if let Some(first) = item.get("firstName").and_then(|f| f.as_str()) {
-            let last = item.get("lastName").and_then(|l| l.as_str()).unwrap_or("");
-            let occupation = item.get("occupation").and_then(|o| o.as_str())
-                .or_else(|| item.get("headline").and_then(|h| h.as_str()))
-                .unwrap_or("");
-            let public_id = item.get("publicIdentifier").and_then(|p| p.as_str());
-            // Store entityUrn as linkedin_id for messaging (urn:li:fs_miniProfile:ABC)
-            let entity_urn = item.get("entityUrn").and_then(|u| u.as_str());
-            let linkedin_id = entity_urn
-                .map(|s| s.to_string())
-                .or_else(|| public_id.map(|s| s.to_string()));
-
-            if first.is_empty() && last.is_empty() { return None; }
-
-            return Some(Contact {
-                id: None,
-                linkedin_id,
-                prenom: first.to_string(),
-                nom: last.to_string(),
-                poste: occupation.to_string(),
-                entreprise_siren: None,
-                entreprise_nom: company.map(|s| s.to_string()),
-                linkedin_url: public_id.map(|id| format!("https://www.linkedin.com/in/{}", id)),
-                email: None,
-            });
-        }
-
-        // Try title.text (EntityResult format in included)
-        let title_text = item.get("title")
-            .and_then(|t| t.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        if title_text.is_empty() { return None; }
-
-        let parts: Vec<&str> = title_text.splitn(2, ' ').collect();
-        let prenom = parts.first().unwrap_or(&"").to_string();
-        let nom = parts.get(1).unwrap_or(&"").to_string();
-
-        let headline = item.get("primarySubtitle")
-            .and_then(|s| s.get("text"))
-            .and_then(|t| t.as_str())
-            .or_else(|| item.get("headline").and_then(|h| h.get("text")).and_then(|t| t.as_str()))
-            .unwrap_or("")
-            .to_string();
-
-        let nav_url = item.get("navigationUrl")
-            .and_then(|u| u.as_str())
-            .map(|u| u.split('?').next().unwrap_or(u).to_string());
-
-        let public_id = nav_url.as_ref()
-            .and_then(|u| u.strip_prefix("https://www.linkedin.com/in/"))
-            .map(|s| s.trim_end_matches('/').to_string());
-
-        Some(Contact {
-            id: None,
-            linkedin_id: public_id,
-            prenom,
-            nom,
-            poste: headline,
-            entreprise_siren: None,
-            entreprise_nom: company.map(|s| s.to_string()),
-            linkedin_url: nav_url,
-            email: None,
-        })
-    }
-
-    fn parse_entity_result(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
-        let entity = item.get("item")
-            .and_then(|i| i.get("entityResult"))?;
-
-        let title_text = entity.get("title")
-            .and_then(|t| t.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        if title_text.is_empty() { return None; }
-
-        let parts: Vec<&str> = title_text.splitn(2, ' ').collect();
-        let prenom = parts.first().unwrap_or(&"").to_string();
-        let nom = parts.get(1).unwrap_or(&"").to_string();
-
-        let headline = entity.get("primarySubtitle")
-            .and_then(|s| s.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let nav_url = entity.get("navigationUrl")
-            .and_then(|u| u.as_str())
-            .map(|u| u.split('?').next().unwrap_or(u).to_string());
-
-        let public_id = nav_url.as_ref()
-            .and_then(|u| u.strip_prefix("https://www.linkedin.com/in/"))
-            .map(|s| s.trim_end_matches('/').to_string());
-
-        Some(Contact {
-            id: None,
-            linkedin_id: public_id,
-            prenom,
-            nom,
-            poste: headline,
-            entreprise_siren: None,
-            entreprise_nom: company.map(|s| s.to_string()),
-            linkedin_url: nav_url,
-            email: None,
-        })
-    }
-
-    fn parse_mini_profile(item: &serde_json::Value, company: Option<&str>) -> Option<Contact> {
-        let first = item.get("firstName").and_then(|f| f.as_str())?;
-        let last = item.get("lastName").and_then(|l| l.as_str()).unwrap_or("");
-        let occupation = item.get("occupation").and_then(|o| o.as_str()).unwrap_or("");
-        let public_id = item.get("publicIdentifier").and_then(|p| p.as_str());
-
-        Some(Contact {
-            id: None,
-            linkedin_id: public_id.map(|s| s.to_string()),
-            prenom: first.to_string(),
-            nom: last.to_string(),
-            poste: occupation.to_string(),
-            entreprise_siren: None,
-            entreprise_nom: company.map(|s| s.to_string()),
-            linkedin_url: public_id.map(|id| format!("https://www.linkedin.com/in/{}", id)),
-            email: None,
-        })
-    }
-
-    /// Login LinkedIn avec email/password et retourne le cookie li_at
-    pub async fn login_get_cookie(email: &str, password: &str) -> Result<String> {
-        let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
-        let http_client = reqwest::Client::builder()
-            .cookie_provider(jar.clone())
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .build()
-            .context("Erreur création client HTTP")?;
-
-        // Step 1: GET login page to extract CSRF token
-        let login_page = http_client
-            .get("https://www.linkedin.com/login")
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .context("Impossible d'accéder à la page de login LinkedIn")?;
-
-        let login_html = login_page.text().await.unwrap_or_default();
-
-        // Extract loginCsrfParam from HTML
-        let csrf_token = login_html
-            .split("loginCsrfParam")
-            .nth(1)
-            .and_then(|s| s.split("value=\"").nth(1))
-            .and_then(|s| s.split('"').next())
-            .context("CSRF token introuvable sur la page de login LinkedIn")?
-            .to_string();
-
-        // Step 2: POST login form
-        let _login_resp = http_client
-            .post("https://www.linkedin.com/checkpoint/lg/login-submit")
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Referer", "https://www.linkedin.com/login")
-            .header("Origin", "https://www.linkedin.com")
-            .form(&[
-                ("session_key", email),
-                ("session_password", password),
-                ("loginCsrfParam", csrf_token.as_str()),
-            ])
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await
-            .context("Erreur lors du login LinkedIn")?;
-
-        // Step 3: Check cookie jar for li_at
-        let linkedin_url = reqwest::Url::parse("https://www.linkedin.com").unwrap();
-        let cookies_str = jar.cookies(&linkedin_url)
-            .map(|h| h.to_str().unwrap_or("").to_string())
-            .unwrap_or_default();
-
-        // Parse li_at from cookie string "li_at=ABC; other=DEF"
-        if let Some(li_at) = Self::extract_cookie_value(&cookies_str, "li_at") {
-            return Ok(li_at);
-        }
-
-        // Step 4: Try accessing feed to trigger more cookie setting
-        let _feed_resp = http_client
-            .get("https://www.linkedin.com/feed/")
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .context("Erreur accès feed LinkedIn après login")?;
-
-        let cookies_str = jar.cookies(&linkedin_url)
-            .map(|h| h.to_str().unwrap_or("").to_string())
-            .unwrap_or_default();
-
-        if let Some(li_at) = Self::extract_cookie_value(&cookies_str, "li_at") {
-            return Ok(li_at);
-        }
-
-        // Check if login failed
-        let resp_url = _feed_resp.url().to_string();
-        if resp_url.contains("checkpoint") || resp_url.contains("challenge") {
-            anyhow::bail!("LinkedIn demande une vérification (2FA/captcha). Connectez-vous dans un navigateur puis copiez le cookie li_at manuellement.");
-        }
-        if resp_url.contains("login") {
-            anyhow::bail!("Identifiants LinkedIn incorrects (redirigé vers login).");
-        }
-
-        anyhow::bail!("Cookie li_at non obtenu. Cookies reçus: {} — URL finale: {}",
-            if cookies_str.len() > 100 { &cookies_str[..100] } else { &cookies_str },
-            resp_url);
-    }
-
-    fn extract_cookie_value(cookies_str: &str, name: &str) -> Option<String> {
-        let prefix = format!("{}=", name);
-        cookies_str.split("; ")
-            .find(|c| c.starts_with(&prefix))
-            .map(|c| c[prefix.len()..].to_string())
-            .filter(|v| !v.is_empty() && v != "\"\"")
-    }
-
-    fn voyager_request(&self, client: &reqwest::Client, method: reqwest::Method, url: &str) -> Result<reqwest::RequestBuilder> {
-        let cookie = self.cookie_li_at.as_ref()
-            .context("LinkedIn nécessite le cookie li_at.")?;
-        Ok(client.request(method, url)
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15)))
-    }
-
-    /// Envoie un message LinkedIn à un contact via Voyager API
-    /// recipient_id peut être un URN (urn:li:fs_miniProfile:ABC) ou un publicIdentifier (cyrille-verger)
+    /// Envoie un message LinkedIn via linkedin-api (Python)
     pub async fn send_message(&self, recipient_id: &str, body: &str) -> Result<()> {
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        // Resolve recipient to proper URN
-        let recipient_urn = if recipient_id.starts_with("urn:li:") {
-            recipient_id.to_string()
+        // Determine if we have a URN or publicIdentifier
+        let params = if recipient_id.starts_with("ACoA") || recipient_id.contains("urn_id") {
+            // URN ID from search results
+            serde_json::json!({
+                "recipients": [recipient_id],
+                "message": body,
+            })
         } else {
-            // Resolve publicIdentifier to URN via search
-            let search_url = format!(
-                "https://www.linkedin.com/voyager/api/search/dash/clusters\
-                ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
-                &origin=GLOBAL_SEARCH_HEADER&q=all\
-                &query=(keywords:{},flagshipSearchIntent:SEARCH_SRP,\
-queryParameters:(resultType:List(PEOPLE)))&count=1",
-                urlencoding::encode(recipient_id)
-            );
-            let search_resp = self.voyager_request(&http_client, reqwest::Method::GET, &search_url)?
-                .send()
-                .await
-                .context("Erreur recherche profil LinkedIn")?;
-
-            if !search_resp.status().is_success() {
-                anyhow::bail!("Impossible de résoudre le profil '{}' (HTTP {}). Resauvez le contact depuis une nouvelle recherche LinkedIn.",
-                    recipient_id, search_resp.status());
-            }
-
-            let data: serde_json::Value = search_resp.json().await.unwrap_or_default();
-
-            // Look for entityUrn in included profiles
-            let urn = data.get("included").and_then(|inc| inc.as_array())
-                .and_then(|items| {
-                    items.iter().find_map(|item| {
-                        let t = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
-                        if !t.contains("Profile") { return None; }
-                        let pub_id = item.get("publicIdentifier").and_then(|p| p.as_str())?;
-                        if pub_id == recipient_id {
-                            item.get("entityUrn").and_then(|u| u.as_str()).map(|s| s.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                });
-
-            match urn {
-                Some(u) => u,
-                None => anyhow::bail!(
-                    "Profil '{}' non trouvé dans les résultats LinkedIn. Resauvez le contact depuis une recherche.",
-                    recipient_id),
-            }
+            // Public identifier — let Python resolve it
+            serde_json::json!({
+                "public_id": recipient_id,
+                "message": body,
+            })
         };
 
-        // Send message
-        let payload = serde_json::json!({
-            "keyVersion": "LEGACY_INBOX",
-            "conversationCreate": {
-                "eventCreate": {
-                    "value": {
-                        "com.linkedin.voyager.messaging.create.MessageCreate": {
-                            "body": body,
-                            "attachments": []
-                        }
-                    }
-                },
-                "recipients": [&recipient_urn],
-                "subtype": "MEMBER_TO_MEMBER"
-            }
-        });
-
-        let resp = self.voyager_request(&http_client, reqwest::Method::POST,
-            "https://www.linkedin.com/voyager/api/messaging/conversations")?
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .context("Erreur d'envoi de message LinkedIn")?;
-
-        let status = resp.status();
-        let resp_body = resp.text().await.unwrap_or_default();
-
-        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
-            anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
-        }
-
-        if !status.is_success() && status.as_u16() != 201 {
-            anyhow::bail!("Envoi LinkedIn {} (recipient='{}') : {}", status, recipient_urn,
-                if resp_body.len() > 400 { &resp_body[..400] } else { &resp_body });
-        }
-
+        self.bridge_call("send", params).await?;
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn extract_member_id(data: &serde_json::Value) -> Option<String> {
-        for path in &[
-            vec!["entityUrn"],
-            vec!["data", "entityUrn"],
-            vec!["miniProfile", "entityUrn"],
-            vec!["data", "miniProfile", "entityUrn"],
-        ] {
-            let mut current = data;
-            let mut found = true;
-            for key in path {
-                match current.get(key) {
-                    Some(v) => current = v,
-                    None => { found = false; break; }
-                }
-            }
-            if found {
-                if let Some(urn) = current.as_str() {
-                    if let Some(id) = urn.rsplit(':').next() {
-                        return Some(id.to_string());
-                    }
-                }
-            }
+    /// Login via linkedin-api et retourne le cookie li_at
+    pub async fn login_get_cookie(email: &str, password: &str) -> Result<String> {
+        let bridge = Self::bridge_path()?;
+
+        let input = serde_json::json!({
+            "action": "get_cookie",
+            "email": email,
+            "password": password,
+            "params": {},
+        });
+
+        let input_str = serde_json::to_string(&input)?;
+
+        let mut child = tokio::process::Command::new("python3")
+            .arg(&bridge)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Impossible de lancer python3")?;
+
+        if let Some(ref mut stdin) = child.stdin {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(input_str.as_bytes()).await?;
+            stdin.shutdown().await?;
         }
 
-        if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
-            for item in included {
-                let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
-                if type_name.contains("Profile") {
-                    if let Some(urn) = item.get("entityUrn").and_then(|u| u.as_str()) {
-                        if let Some(id) = urn.rsplit(':').next() {
-                            return Some(id.to_string());
-                        }
-                    }
-                }
-            }
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            child.wait_with_output(),
+        )
+        .await
+        .context("Timeout login LinkedIn")?
+        .context("Erreur bridge LinkedIn")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let result: serde_json::Value = serde_json::from_str(stdout.trim())
+            .context(format!("Réponse invalide: {}", &stdout[..stdout.len().min(200)]))?;
+
+        if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+            anyhow::bail!("{}", err);
         }
 
-        None
+        result.get("li_at")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .context("Cookie li_at non retourné par le bridge")
     }
 
     /// Flux OAuth2 complet : ouvre le navigateur, écoute le callback, échange le code
@@ -622,16 +271,13 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
         client_secret: &str,
         redirect_uri: &str,
     ) -> Result<String> {
-        // Parse port from redirect_uri
         let port = Self::parse_port_from_uri(redirect_uri)?;
         let path = Self::parse_path_from_uri(redirect_uri);
 
-        // Bind the TCP listener BEFORE opening the browser
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
             .await
-            .context(format!("Impossible d'écouter sur le port {}. Vérifiez qu'il n'est pas utilisé.", port))?;
+            .context(format!("Impossible d'écouter sur le port {}", port))?;
 
-        // Build authorization URL and open browser
         let auth_url = format!(
             "https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={}&redirect_uri={}&scope=openid%20profile%20email%20w_member_social",
             urlencoding::encode(client_id),
@@ -639,22 +285,18 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
         );
         let _ = open::that(&auth_url);
 
-        // Wait for the callback (timeout 120s)
         let code = tokio::time::timeout(
             std::time::Duration::from_secs(120),
             Self::wait_for_callback(&listener, &path),
         )
         .await
-        .context("Timeout: pas de réponse LinkedIn en 2 minutes. Réessayez.")?
+        .context("Timeout: pas de réponse LinkedIn en 2 minutes.")?
         .context("Erreur lors de la réception du callback")?;
 
-        // Exchange code for token
         let token = Self::oauth2_exchange_token(client_id, client_secret, &code, redirect_uri).await?;
-
         Ok(token)
     }
 
-    /// Wait for OAuth2 callback on local TCP listener
     async fn wait_for_callback(
         listener: &tokio::net::TcpListener,
         expected_path: &str,
@@ -664,11 +306,9 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
                 .context("Erreur d'acceptation de connexion")?;
 
             let mut buf = vec![0u8; 4096];
-            let n = stream.read(&mut buf).await
-                .context("Erreur de lecture HTTP")?;
+            let n = stream.read(&mut buf).await?;
             let request = String::from_utf8_lossy(&buf[..n]);
 
-            // Parse GET line: "GET /callback?code=XXXX&state=... HTTP/1.1"
             let first_line = request.lines().next().unwrap_or("");
             let parts: Vec<&str> = first_line.split_whitespace().collect();
             if parts.len() < 2 || parts[0] != "GET" {
@@ -677,8 +317,6 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
             }
 
             let request_uri = parts[1];
-
-            // Check path matches
             let (req_path, query) = match request_uri.split_once('?') {
                 Some((p, q)) => (p, q),
                 None => {
@@ -692,7 +330,6 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
                 continue;
             }
 
-            // Check for error
             let params: Vec<(&str, &str)> = query
                 .split('&')
                 .filter_map(|p| p.split_once('='))
@@ -709,11 +346,8 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
                 anyhow::bail!("LinkedIn OAuth2 erreur: {} - {}", err, desc);
             }
 
-            // Extract code
             if let Some((_, code)) = params.iter().find(|(k, _)| *k == "code") {
-                let code = urlencoding::decode(code)
-                    .unwrap_or_default()
-                    .to_string();
+                let code = urlencoding::decode(code).unwrap_or_default().to_string();
                 Self::send_http_response(&mut stream, 200, OAUTH_SUCCESS_HTML).await;
                 return Ok(code);
             }
@@ -724,16 +358,10 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
 
     async fn send_http_response(stream: &mut tokio::net::TcpStream, status: u16, body: &str) {
         let status_text = match status {
-            200 => "OK",
-            400 => "Bad Request",
-            404 => "Not Found",
-            _ => "Error",
+            200 => "OK", 400 => "Bad Request", 404 => "Not Found", _ => "Error",
         };
-        let html = if body.starts_with('<') {
-            body.to_string()
-        } else {
-            format!("<html><body><h2>{}</h2></body></html>", body)
-        };
+        let html = if body.starts_with('<') { body.to_string() }
+        else { format!("<html><body><h2>{}</h2></body></html>", body) };
         let response = format!(
             "HTTP/1.1 {} {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             status, status_text, html.len(), html
@@ -743,7 +371,6 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
     }
 
     fn parse_port_from_uri(uri: &str) -> Result<u16> {
-        // http://localhost:8080/callback -> 8080
         let after_scheme = uri.split("://").nth(1).unwrap_or(uri);
         let host_port = after_scheme.split('/').next().unwrap_or("");
         if let Some(port_str) = host_port.split(':').nth(1) {
@@ -754,7 +381,6 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
     }
 
     fn parse_path_from_uri(uri: &str) -> String {
-        // http://localhost:8080/callback -> /callback
         let after_scheme = uri.split("://").nth(1).unwrap_or(uri);
         match after_scheme.find('/') {
             Some(idx) => after_scheme[idx..].to_string(),
@@ -762,7 +388,6 @@ queryParameters:(resultType:List(PEOPLE)))&count=1",
         }
     }
 
-    /// Échange un code OAuth2 contre un token d'accès
     pub async fn oauth2_exchange_token(
         client_id: &str,
         client_secret: &str,
