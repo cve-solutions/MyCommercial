@@ -398,53 +398,50 @@ queryParameters:(resultType:List(PEOPLE)))\
             .context("Envoi LinkedIn nécessite le cookie li_at.")?;
 
         let http_client = reqwest::Client::builder()
+            .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-
-        let make_headers = |cookie: &str| -> Vec<(&str, String)> {
-            vec![
-                ("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie)),
-                ("Csrf-Token", "ajax:0".into()),
-                ("X-Li-Lang", "fr_FR".into()),
-                ("X-Restli-Protocol-Version", "2.0.0".into()),
-                ("Accept", "application/vnd.linkedin.normalized+json+2.1".into()),
-                ("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36".into()),
-            ]
-        };
 
         // Step 1: Resolve public identifier to internal profile URN
         let profile_url = format!(
             "https://www.linkedin.com/voyager/api/identity/profiles/{}",
             urlencoding::encode(recipient_id)
         );
-        let headers = make_headers(cookie);
-        let mut req = http_client.get(&profile_url).timeout(std::time::Duration::from_secs(15));
-        for (k, v) in &headers { req = req.header(*k, v); }
-        let profile_resp = req.send().await
+
+        let profile_resp = http_client
+            .get(&profile_url)
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
+            .header("X-Li-Lang", "fr_FR")
+            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
+            .header("X-Restli-Protocol-Version", "2.0.0")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
             .context("Erreur récupération profil LinkedIn")?;
 
         if !profile_resp.status().is_success() {
-            anyhow::bail!("Profil LinkedIn introuvable pour '{}' (HTTP {})", recipient_id, profile_resp.status());
+            let status = profile_resp.status();
+            let resp_body = profile_resp.text().await.unwrap_or_default();
+            anyhow::bail!("Profil LinkedIn '{}' : HTTP {} — {}", recipient_id, status,
+                if resp_body.len() > 200 { &resp_body[..200] } else { &resp_body });
         }
 
-        let profile_data: serde_json::Value = profile_resp.json().await
+        let profile_text = profile_resp.text().await.unwrap_or_default();
+        let profile_data: serde_json::Value = serde_json::from_str(&profile_text)
             .context("Erreur parsing profil LinkedIn")?;
 
-        // Extract entityUrn or miniProfile entityUrn
-        let entity_urn = profile_data.get("entityUrn")
-            .or_else(|| profile_data.get("data").and_then(|d| d.get("entityUrn")))
-            .or_else(|| profile_data.get("miniProfile").and_then(|m| m.get("entityUrn")))
-            .and_then(|u| u.as_str())
-            .context(format!("Impossible de trouver l'URN du profil '{}'. Réponse: {}",
+        // Extract member ID from various response formats
+        let member_id = Self::extract_member_id(&profile_data)
+            .context(format!("Impossible de trouver l'ID membre pour '{}'. Clés: {:?}",
                 recipient_id,
-                serde_json::to_string(&profile_data).unwrap_or_default().chars().take(200).collect::<String>()))?;
+                profile_data.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
+            ))?;
 
-        // Convert fsd_profile URN to mailbox URN
-        // entityUrn: "urn:li:fsd_profile:ABC123" -> we need the member ID
-        let member_id = entity_urn.rsplit(':').next().unwrap_or(entity_urn);
-
-        // Step 2: Send message via messaging endpoint
+        // Step 2: Send message
         let payload = serde_json::json!({
             "message": {
                 "body": {
@@ -458,15 +455,21 @@ queryParameters:(resultType:List(PEOPLE)))\
             "hostRecipientUrns": [format!("urn:li:fsd_profile:{}", member_id)]
         });
 
-        let headers = make_headers(cookie);
-        let mut req = http_client
+        let resp = http_client
             .post("https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage")
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
             .header("Content-Type", "application/json")
+            .header("X-Li-Lang", "fr_FR")
+            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
+            .header("X-Restli-Protocol-Version", "2.0.0")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(15))
-            .json(&payload);
-        for (k, v) in &headers { req = req.header(*k, v); }
-
-        let resp = req.send().await.context("Erreur d'envoi de message LinkedIn")?;
+            .json(&payload)
+            .send()
+            .await
+            .context("Erreur d'envoi de message LinkedIn")?;
 
         let status = resp.status();
         let resp_body = resp.text().await.unwrap_or_default();
@@ -477,6 +480,49 @@ queryParameters:(resultType:List(PEOPLE)))\
         }
 
         Ok(())
+    }
+
+    fn extract_member_id(data: &serde_json::Value) -> Option<String> {
+        // Try data.entityUrn or data.data.entityUrn
+        for path in &[
+            vec!["entityUrn"],
+            vec!["data", "entityUrn"],
+            vec!["miniProfile", "entityUrn"],
+            vec!["data", "miniProfile", "entityUrn"],
+        ] {
+            let mut current = data;
+            let mut found = true;
+            for key in path {
+                match current.get(key) {
+                    Some(v) => current = v,
+                    None => { found = false; break; }
+                }
+            }
+            if found {
+                if let Some(urn) = current.as_str() {
+                    // "urn:li:fsd_profile:ABC123" or "urn:li:member:12345"
+                    if let Some(id) = urn.rsplit(':').next() {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+
+        // Try looking in "included" array for profiles
+        if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
+            for item in included {
+                let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+                if type_name.contains("Profile") {
+                    if let Some(urn) = item.get("entityUrn").and_then(|u| u.as_str()) {
+                        if let Some(id) = urn.rsplit(':').next() {
+                            return Some(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Flux OAuth2 complet : ouvre le navigateur, écoute le callback, échange le code
