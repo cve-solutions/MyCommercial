@@ -28,7 +28,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             .column(egui_extras::Column::exact(100.0))  // Statut
             .column(egui_extras::Column::exact(110.0))  // Date
             .column(egui_extras::Column::remainder())    // Aperçu
-            .column(egui_extras::Column::exact(260.0))  // Actions
+            .column(egui_extras::Column::initial(280.0).at_least(200.0))  // Actions
             .header(22.0, |mut header| {
                 header.col(|ui| { ui.strong("Contact"); });
                 header.col(|ui| { ui.strong("Entreprise"); });
@@ -78,6 +78,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                                 }
                                 if ui.small_button("\u{1f4e4} Odoo").clicked() {
                                     action = Some(MsgAction::SyncOdoo(i));
+                                }
+                                if ui.small_button("\u{1f5d1}").clicked() {
+                                    action = Some(MsgAction::Delete(i));
                                 }
                             });
                         });
@@ -140,6 +143,17 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 }
             }
         }
+        Some(MsgAction::Delete(idx)) => {
+            if let Some((msg, contact)) = app.messages.get(idx) {
+                if let Some(mid) = msg.id {
+                    let name = format!("{} {}", contact.prenom, contact.nom);
+                    let _ = db::delete_message(&app.db, mid);
+                    app.toast(format!("Message pour {} supprimé", name), theme::WARNING);
+                    app.message_selected = None;
+                    app.refresh_data();
+                }
+            }
+        }
         None => {}
     }
 }
@@ -148,6 +162,7 @@ enum MsgAction {
     SendLinkedIn(usize),
     CycleStatus(usize),
     SyncOdoo(usize),
+    Delete(usize),
 }
 
 fn next_status(s: &MessageStatus) -> MessageStatus {

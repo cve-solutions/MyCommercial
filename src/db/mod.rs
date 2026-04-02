@@ -335,6 +335,12 @@ pub fn update_message_status(db: &DbPool, msg_id: i64, status: &MessageStatus) -
     Ok(())
 }
 
+pub fn delete_message(db: &DbPool, msg_id: i64) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute("DELETE FROM messages WHERE id = ?1", params![msg_id])?;
+    Ok(())
+}
+
 pub fn get_messages(db: &DbPool, limit: u32, offset: u32) -> Result<Vec<(ProspectionMessage, Contact)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
