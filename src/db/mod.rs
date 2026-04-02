@@ -138,6 +138,9 @@ fn migrate_entreprises(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Remove deprecated settings
+    let _ = conn.execute("DELETE FROM settings WHERE category='linkedin' AND key='api_key'", []);
+
     Ok(())
 }
 
@@ -152,7 +155,6 @@ fn seed_default_settings(conn: &Connection) -> Result<()> {
         ("linkedin", "cookie_li_at", "", "Cookie li_at pour auth par cookie", "password"),
         ("linkedin", "login_email", "", "Email de connexion LinkedIn (pour auto-login)", "string"),
         ("linkedin", "login_password", "", "Mot de passe LinkedIn (pour auto-login)", "password"),
-        ("linkedin", "api_key", "", "API Key LinkedIn", "password"),
         ("linkedin", "daily_limit", "50", "Limite quotidienne de messages", "number"),
         ("linkedin", "delay_between_messages_sec", "30", "Délai entre messages (secondes)", "number"),
 

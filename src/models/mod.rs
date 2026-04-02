@@ -202,7 +202,6 @@ pub struct OllamaModel {
 pub enum LinkedInAuthMethod {
     OAuth2,
     Cookie,
-    ApiKey,
 }
 
 impl LinkedInAuthMethod {
@@ -210,15 +209,13 @@ impl LinkedInAuthMethod {
         match self {
             Self::OAuth2 => "OAuth2",
             Self::Cookie => "Cookie (li_at)",
-            Self::ApiKey => "API Key",
         }
     }
 
     pub fn from_db(s: &str) -> Self {
         match s {
             "oauth2" => Self::OAuth2,
-            "cookie" => Self::Cookie,
-            "api_key" => Self::ApiKey,
+            "cookie" | "api_key" => Self::Cookie,
             _ => Self::OAuth2,
         }
     }
@@ -227,7 +224,6 @@ impl LinkedInAuthMethod {
         match self {
             Self::OAuth2 => "oauth2",
             Self::Cookie => "cookie",
-            Self::ApiKey => "api_key",
         }
     }
 }

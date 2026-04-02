@@ -12,7 +12,6 @@ pub struct LinkedInClient {
     auth_method: LinkedInAuthMethod,
     access_token: Option<String>,
     cookie_li_at: Option<String>,
-    api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,43 +44,17 @@ impl LinkedInClient {
         let auth_method = LinkedInAuthMethod::from_db(&settings.linkedin_auth_method());
         let access_token = settings.get("linkedin", "access_token").ok().filter(|s| !s.is_empty());
         let cookie_li_at = settings.get("linkedin", "cookie_li_at").ok().filter(|s| !s.is_empty());
-        let api_key = settings.get("linkedin", "api_key").ok().filter(|s| !s.is_empty());
 
         Ok(Self {
             client: Client::new(),
             auth_method,
             access_token,
             cookie_li_at,
-            api_key,
         })
     }
 
     pub fn is_authenticated(&self) -> bool {
-        match self.auth_method {
-            LinkedInAuthMethod::OAuth2 => self.access_token.is_some(),
-            LinkedInAuthMethod::Cookie => self.cookie_li_at.is_some(),
-            LinkedInAuthMethod::ApiKey => self.api_key.is_some(),
-        }
-    }
-
-    fn auth_header(&self) -> Result<(String, String)> {
-        match self.auth_method {
-            LinkedInAuthMethod::OAuth2 => {
-                let token = self.access_token.as_ref()
-                    .context("Token OAuth2 non configuré")?;
-                Ok(("Authorization".into(), format!("Bearer {}", token)))
-            }
-            LinkedInAuthMethod::Cookie => {
-                let cookie = self.cookie_li_at.as_ref()
-                    .context("Cookie li_at non configuré")?;
-                Ok(("Cookie".into(), format!("li_at={}", cookie)))
-            }
-            LinkedInAuthMethod::ApiKey => {
-                let key = self.api_key.as_ref()
-                    .context("API Key non configurée")?;
-                Ok(("Authorization".into(), format!("Bearer {}", key)))
-            }
-        }
+        self.cookie_li_at.is_some() || self.access_token.is_some()
     }
 
     /// Recherche des profils LinkedIn via Voyager API (nécessite cookie li_at)
