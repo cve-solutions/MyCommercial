@@ -277,12 +277,17 @@ queryParameters:(resultType:List(PEOPLE)))\
                 .or_else(|| item.get("headline").and_then(|h| h.as_str()))
                 .unwrap_or("");
             let public_id = item.get("publicIdentifier").and_then(|p| p.as_str());
+            // Store entityUrn as linkedin_id for messaging (urn:li:fs_miniProfile:ABC)
+            let entity_urn = item.get("entityUrn").and_then(|u| u.as_str());
+            let linkedin_id = entity_urn
+                .map(|s| s.to_string())
+                .or_else(|| public_id.map(|s| s.to_string()));
 
             if first.is_empty() && last.is_empty() { return None; }
 
             return Some(Contact {
                 id: None,
-                linkedin_id: public_id.map(|s| s.to_string()),
+                linkedin_id,
                 prenom: first.to_string(),
                 nom: last.to_string(),
                 poste: occupation.to_string(),
@@ -407,39 +412,23 @@ queryParameters:(resultType:List(PEOPLE)))\
     }
 
     /// Envoie un message LinkedIn à un contact via Voyager API
+    /// recipient_id peut être un URN (urn:li:fs_miniProfile:ABC) ou un publicIdentifier (cyrille-verger)
     pub async fn send_message(&self, recipient_id: &str, body: &str) -> Result<()> {
         let http_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Step 1: Resolve public ID to profile URN
-        let profile_url = format!(
-            "https://www.linkedin.com/voyager/api/identity/profiles/{}",
-            urlencoding::encode(recipient_id)
-        );
-        let profile_resp = self.voyager_request(&http_client, reqwest::Method::GET, &profile_url)?
-            .send()
-            .await
-            .context("Erreur récupération profil LinkedIn")?;
+        // Determine recipient URN
+        let recipient_urn = if recipient_id.starts_with("urn:li:") {
+            // Already a URN — use directly
+            recipient_id.to_string()
+        } else {
+            // publicIdentifier — wrap as miniProfile URN
+            // (the legacy API also accepts publicIdentifier directly in some cases)
+            recipient_id.to_string()
+        };
 
-        let profile_status = profile_resp.status();
-        if !profile_status.is_success() {
-            let resp_body = profile_resp.text().await.unwrap_or_default();
-            anyhow::bail!("Profil '{}' : HTTP {} — {}", recipient_id, profile_status,
-                if resp_body.len() > 200 { &resp_body[..200] } else { &resp_body });
-        }
-
-        let profile_data: serde_json::Value = profile_resp.json().await
-            .context("Erreur parsing profil")?;
-
-        let member_id = Self::extract_member_id(&profile_data)
-            .context(format!("ID membre introuvable pour '{}'. Clés: {:?}",
-                recipient_id,
-                profile_data.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
-            ))?;
-
-        // Step 2: Send message with miniProfile URN
         let payload = serde_json::json!({
             "keyVersion": "LEGACY_INBOX",
             "conversationCreate": {
@@ -451,7 +440,7 @@ queryParameters:(resultType:List(PEOPLE)))\
                         }
                     }
                 },
-                "recipients": [format!("urn:li:fs_miniProfile:{}", member_id)],
+                "recipients": [recipient_urn],
                 "subtype": "MEMBER_TO_MEMBER"
             }
         });
@@ -467,7 +456,7 @@ queryParameters:(resultType:List(PEOPLE)))\
         let status = resp.status();
         let resp_body = resp.text().await.unwrap_or_default();
 
-        if status.as_u16() == 401 || status.as_u16() == 403 {
+        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
             anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
         }
 
