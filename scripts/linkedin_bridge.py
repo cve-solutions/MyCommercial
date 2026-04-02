@@ -33,18 +33,30 @@ def main():
         sys.exit(1)
 
     # Use cookies cache to avoid re-login each time
-    cookies_dir = os.path.expanduser("~/.local/share/mycommercial")
+    cookies_dir = os.path.expanduser("~/.local/share/mycommercial/linkedin_cookies")
     os.makedirs(cookies_dir, exist_ok=True)
 
+    api = None
     try:
         api = Linkedin(email, password, cookies_dir=cookies_dir)
     except Exception as e:
         err_str = str(e)
-        if "CHALLENGE" in err_str.upper() or "checkpoint" in err_str.lower():
+        if "expired" in err_str.lower() or "session" in err_str.lower():
+            # Cached session expired — clear and retry with fresh login
+            import glob
+            for f in glob.glob(os.path.join(cookies_dir, "*.pkl")):
+                os.remove(f)
+            try:
+                api = Linkedin(email, password, cookies_dir=cookies_dir, refresh_cookies=True)
+            except Exception as e2:
+                print(json.dumps({"error": f"Login LinkedIn échoué (retry): {e2}"}))
+                sys.exit(1)
+        elif "CHALLENGE" in err_str.upper() or "checkpoint" in err_str.lower():
             print(json.dumps({"error": "LinkedIn demande une vérification (2FA/captcha). Connectez-vous d'abord dans un navigateur."}))
+            sys.exit(1)
         else:
             print(json.dumps({"error": f"Login LinkedIn échoué: {err_str}"}))
-        sys.exit(1)
+            sys.exit(1)
 
     try:
         if action == "search":
@@ -62,6 +74,10 @@ def main():
         elif action == "login":
             # Just test login
             print(json.dumps({"ok": True, "message": "Login OK"}))
+
+        elif action == "send_batch":
+            results = do_send_batch(api, params)
+            print(json.dumps({"ok": True, "results": results}))
 
         elif action == "get_cookie":
             # Extract li_at cookie from session
@@ -160,8 +176,10 @@ def do_send(api, params):
         # But 200 is also success for some endpoints
         if status in (200, 201):
             return {"ok": True, "message": f"Message envoyé (HTTP {status})"}
+        elif status == 401 or status == 403:
+            return {"error": f"Session LinkedIn expirée (HTTP {status}). Supprimez le cache: rm -rf ~/.local/share/mycommercial/linkedin_cookies/ puis réessayez."}
         elif result is True:
-            return {"error": f"LinkedIn a refusé le message vers {recipients} (HTTP {status}). Réponse: {resp_text[:200]}"}
+            return {"error": f"LinkedIn a refusé le message vers {recipients} (HTTP {status}). Réponse: {resp_text[:300]}"}
         else:
             return {"ok": True, "message": f"Message envoyé (result={result}, HTTP {status})"}
     except Exception as e:
@@ -182,6 +200,24 @@ def do_profile(api, params):
         "location": profile.get("locationName", ""),
         "industry": profile.get("industryName", ""),
     }
+
+
+def do_send_batch(api, params):
+    """Send messages to multiple recipients with delay between each."""
+    import time
+    messages = params.get("messages", [])
+    delay = params.get("delay_seconds", 30)
+    results = []
+
+    for i, msg in enumerate(messages):
+        if i > 0:
+            time.sleep(delay)
+
+        result = do_send(api, msg)
+        result["recipient"] = msg.get("public_id") or msg.get("recipients", ["?"])[0]
+        results.append(result)
+
+    return results
 
 
 if __name__ == "__main__":
