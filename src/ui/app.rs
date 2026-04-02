@@ -53,7 +53,7 @@ pub enum AppMessage {
     OllamaModelSelected(String),
     AiSummaryReady { solution_id: i64, summary: String },
     MessageGenerated { contact_id: i64, message: String },
-    LinkedInMessageSent,
+    LinkedInMessageSent(i64),
     OdooLeadCreated { message_id: i64, lead_id: i64 },
     ConnectionTestResult { service: String, success: bool, message: String },
     LinkedInOAuth2Token(String),
@@ -339,7 +339,8 @@ impl MyCommercialApp {
                     self.toast("Message brouillon créé !", theme::SUCCESS);
                     self.refresh_data();
                 }
-                AppMessage::LinkedInMessageSent => {
+                AppMessage::LinkedInMessageSent(msg_id) => {
+                    let _ = db::update_message_status(&self.db, msg_id, &crate::models::MessageStatus::Sent);
                     self.toast("Message LinkedIn envoyé !", theme::SUCCESS);
                     self.refresh_data();
                 }
@@ -617,6 +618,28 @@ impl MyCommercialApp {
             match c.generate_prospection_message(&contact.prenom, &contact.poste,
                 contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl, &signature).await {
                 Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::MessageGenerated { contact_id: cid, message: m }),
+                Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
+            }
+        });
+    }
+
+    pub fn launch_linkedin_send(&mut self, msg_id: i64, recipient_id: String, body: String) {
+        self.toast("Envoi message LinkedIn...", theme::INFO);
+        let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let s = SettingsManager::new(self.db.clone());
+        self.runtime_handle.spawn(async move {
+            match LinkedInClient::new(&s) {
+                Ok(client) => {
+                    if !client.is_authenticated() {
+                        Self::send_msg(&tx, &ctx, AppMessage::Error("LinkedIn non connecté.".into()));
+                        return;
+                    }
+                    match client.send_message(&recipient_id, &body).await {
+                        Ok(()) => Self::send_msg(&tx, &ctx, AppMessage::LinkedInMessageSent(msg_id)),
+                        Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Envoi LinkedIn: {}", e))),
+                    }
+                }
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }
         });

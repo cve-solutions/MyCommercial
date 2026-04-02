@@ -28,7 +28,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             .column(egui_extras::Column::exact(100.0))  // Statut
             .column(egui_extras::Column::exact(110.0))  // Date
             .column(egui_extras::Column::remainder())    // Aperçu
-            .column(egui_extras::Column::exact(180.0))  // Actions
+            .column(egui_extras::Column::exact(260.0))  // Actions
             .header(22.0, |mut header| {
                 header.col(|ui| { ui.strong("Contact"); });
                 header.col(|ui| { ui.strong("Entreprise"); });
@@ -70,6 +70,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                         });
                         row.col(|ui| {
                             ui.horizontal(|ui| {
+                                if ui.small_button("\u{1f517} LinkedIn").clicked() {
+                                    action = Some(MsgAction::SendLinkedIn(i));
+                                }
                                 if ui.small_button("\u{1f504} Statut").clicked() {
                                     action = Some(MsgAction::CycleStatus(i));
                                 }
@@ -108,6 +111,17 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 
     // Process actions
     match action {
+        Some(MsgAction::SendLinkedIn(idx)) => {
+            if let Some((msg, contact)) = app.messages.get(idx).cloned() {
+                if let Some(mid) = msg.id {
+                    if let Some(ref lid) = contact.linkedin_id {
+                        app.launch_linkedin_send(mid, lid.clone(), msg.contenu.clone());
+                    } else {
+                        app.modal_error = Some("Ce contact n'a pas d'identifiant LinkedIn.".into());
+                    }
+                }
+            }
+        }
         Some(MsgAction::CycleStatus(idx)) => {
             if let Some((msg, _)) = app.messages.get(idx) {
                 if let Some(mid) = msg.id {
@@ -131,6 +145,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 }
 
 enum MsgAction {
+    SendLinkedIn(usize),
     CycleStatus(usize),
     SyncOdoo(usize),
 }
