@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     // Launch egui native window
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("MyCommercial - Prospection LinkedIn")
+            .with_title(format!("MyCommercial - Prospection LinkedIn v{}", env!("CARGO_PKG_VERSION")))
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()
