@@ -122,6 +122,22 @@ fn migrate_entreprises(conn: &Connection) -> Result<()> {
     for (col, typ) in &new_cols {
         let _ = conn.execute(&format!("ALTER TABLE entreprises ADD COLUMN {} {}", col, typ), []);
     }
+
+    // Ensure new settings exist in existing databases
+    let new_settings = [
+        ("linkedin", "login_email", "", "Email de connexion LinkedIn (pour auto-login)", "string"),
+        ("linkedin", "login_password", "", "Mot de passe LinkedIn (pour auto-login)", "password"),
+        ("app", "solutions_url", "", "URL du site web pour importer les solutions", "string"),
+        ("prospection", "signature", "Seriez-vous disponible pour un échange rapide ?\n\nCordialement,\nCyrille VERGER\n0787080801\nGoverbyte", "Signature obligatoire en fin de message", "text"),
+    ];
+    for (cat, key, val, desc, vtype) in &new_settings {
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (category, key, value, description, value_type)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![cat, key, val, desc, vtype],
+        )?;
+    }
+
     Ok(())
 }
 
