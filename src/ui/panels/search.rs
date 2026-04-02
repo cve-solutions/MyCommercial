@@ -103,12 +103,12 @@ fn show_entreprises(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::exact(100.0)) // SIREN
-            .column(egui_extras::Column::remainder())    // Nom
-            .column(egui_extras::Column::exact(80.0))   // APE
-            .column(egui_extras::Column::exact(100.0))  // Libellé APE
-            .column(egui_extras::Column::exact(100.0))  // Ville
-            .column(egui_extras::Column::exact(60.0))   // Effectifs
+            .column(egui_extras::Column::initial(90.0).at_least(70.0))   // SIREN
+            .column(egui_extras::Column::remainder().at_least(80.0))    // Nom
+            .column(egui_extras::Column::initial(65.0).at_least(50.0)) // APE
+            .column(egui_extras::Column::initial(90.0).at_least(60.0)) // Libellé APE
+            .column(egui_extras::Column::initial(80.0).at_least(50.0)) // Ville
+            .column(egui_extras::Column::initial(55.0).at_least(40.0)) // Effectifs
             .header(22.0, |mut header| {
                 header.col(|ui| { ui.strong("SIREN"); });
                 header.col(|ui| { ui.strong("Nom"); });
@@ -174,11 +174,11 @@ fn show_linkedin(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::exact(120.0))
-            .column(egui_extras::Column::exact(120.0))
-            .column(egui_extras::Column::remainder())
-            .column(egui_extras::Column::exact(150.0))
-            .column(egui_extras::Column::exact(80.0))
+            .column(egui_extras::Column::initial(100.0).at_least(60.0))  // Prénom
+            .column(egui_extras::Column::initial(100.0).at_least(60.0))  // Nom
+            .column(egui_extras::Column::remainder().at_least(80.0))     // Poste
+            .column(egui_extras::Column::initial(120.0).at_least(60.0))  // Entreprise
+            .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Action
             .header(22.0, |mut header| {
                 header.col(|ui| { ui.strong("Prénom"); });
                 header.col(|ui| { ui.strong("Nom"); });

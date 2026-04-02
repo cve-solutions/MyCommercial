@@ -487,33 +487,58 @@ queryParameters:(resultType:List(PEOPLE)))\
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Build recipient list based on format
-        let recipients = if recipient_id.starts_with("urn:li:") {
-            serde_json::json!([recipient_id])
+        // Resolve recipient to proper URN
+        let recipient_urn = if recipient_id.starts_with("urn:li:") {
+            recipient_id.to_string()
         } else {
-            serde_json::json!([recipient_id])
+            // Resolve publicIdentifier to URN via search
+            let search_url = format!(
+                "https://www.linkedin.com/voyager/api/search/dash/clusters\
+                ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
+                &origin=GLOBAL_SEARCH_HEADER&q=all\
+                &query=(keywords:{},flagshipSearchIntent:SEARCH_SRP,\
+queryParameters:(resultType:List(PEOPLE)))&count=1",
+                urlencoding::encode(recipient_id)
+            );
+            let search_resp = self.voyager_request(&http_client, reqwest::Method::GET, &search_url)?
+                .send()
+                .await
+                .context("Erreur recherche profil LinkedIn")?;
+
+            if !search_resp.status().is_success() {
+                anyhow::bail!("Impossible de résoudre le profil '{}' (HTTP {}). Resauvez le contact depuis une nouvelle recherche LinkedIn.",
+                    recipient_id, search_resp.status());
+            }
+
+            let data: serde_json::Value = search_resp.json().await.unwrap_or_default();
+
+            // Look for entityUrn in included profiles
+            let urn = data.get("included").and_then(|inc| inc.as_array())
+                .and_then(|items| {
+                    items.iter().find_map(|item| {
+                        let t = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+                        if !t.contains("Profile") { return None; }
+                        let pub_id = item.get("publicIdentifier").and_then(|p| p.as_str())?;
+                        if pub_id == recipient_id {
+                            item.get("entityUrn").and_then(|u| u.as_str()).map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+            match urn {
+                Some(u) => u,
+                None => anyhow::bail!(
+                    "Profil '{}' non trouvé dans les résultats LinkedIn. Resauvez le contact depuis une recherche.",
+                    recipient_id),
+            }
         };
 
-        // Try multiple payload formats
-        let payloads = vec![
-            // Format 1: Standard legacy messaging
-            serde_json::json!({
-                "keyVersion": "LEGACY_INBOX",
-                "conversationCreate": {
-                    "eventCreate": {
-                        "value": {
-                            "com.linkedin.voyager.messaging.create.MessageCreate": {
-                                "body": body,
-                                "attachments": []
-                            }
-                        }
-                    },
-                    "recipients": recipients,
-                    "subtype": "MEMBER_TO_MEMBER"
-                }
-            }),
-            // Format 2: Action-based messaging
-            serde_json::json!({
+        // Send message
+        let payload = serde_json::json!({
+            "keyVersion": "LEGACY_INBOX",
+            "conversationCreate": {
                 "eventCreate": {
                     "value": {
                         "com.linkedin.voyager.messaging.create.MessageCreate": {
@@ -522,40 +547,32 @@ queryParameters:(resultType:List(PEOPLE)))\
                         }
                     }
                 },
-                "recipients": recipients,
+                "recipients": [&recipient_urn],
                 "subtype": "MEMBER_TO_MEMBER"
-            }),
-        ];
-
-        let mut last_status = 0u16;
-        let mut last_body = String::new();
-
-        for payload in &payloads {
-            let resp = self.voyager_request(&http_client, reqwest::Method::POST,
-                "https://www.linkedin.com/voyager/api/messaging/conversations")?
-                .header("Content-Type", "application/json")
-                .json(payload)
-                .send()
-                .await
-                .context("Erreur d'envoi de message LinkedIn")?;
-
-            let status = resp.status();
-            let resp_body = resp.text().await.unwrap_or_default();
-
-            if status.is_success() || status.as_u16() == 201 {
-                return Ok(());
             }
+        });
 
-            if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
-                anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
-            }
+        let resp = self.voyager_request(&http_client, reqwest::Method::POST,
+            "https://www.linkedin.com/voyager/api/messaging/conversations")?
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .context("Erreur d'envoi de message LinkedIn")?;
 
-            last_status = status.as_u16();
-            last_body = resp_body;
+        let status = resp.status();
+        let resp_body = resp.text().await.unwrap_or_default();
+
+        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
+            anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
         }
 
-        anyhow::bail!("Envoi LinkedIn {} (recipient='{}') : {}", last_status, recipient_id,
-            if last_body.len() > 400 { &last_body[..400] } else { &last_body });
+        if !status.is_success() && status.as_u16() != 201 {
+            anyhow::bail!("Envoi LinkedIn {} (recipient='{}') : {}", status, recipient_urn,
+                if resp_body.len() > 400 { &resp_body[..400] } else { &resp_body });
+        }
+
+        Ok(())
     }
 
     #[allow(dead_code)]
