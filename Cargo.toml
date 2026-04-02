@@ -1,6 +1,6 @@
 [package]
 name = "mycommercial"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 description = "Application de prospection commerciale LinkedIn avec IA locale"
 authors = ["CVE Solutions"]
@@ -58,7 +58,7 @@ tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
