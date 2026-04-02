@@ -58,6 +58,7 @@ pub enum AppMessage {
     ConnectionTestResult { service: String, success: bool, message: String },
     LinkedInOAuth2Token(String),
     LinkedInOAuth2Progress(String),
+    LinkedInCookieObtained(String),
     SolutionsFromUrl(Vec<crate::models::Solution>),
     Error(String),
     Info(String),
@@ -357,6 +358,14 @@ impl MyCommercialApp {
                     self.toast("LinkedIn connecté avec succès !", theme::SUCCESS);
                     self.refresh_settings_items();
                 }
+                AppMessage::LinkedInCookieObtained(cookie) => {
+                    self.linkedin_oauth_in_progress = false;
+                    let _ = self.settings.set("linkedin", "cookie_li_at", &cookie);
+                    let _ = self.settings.set("linkedin", "auth_method", "cookie");
+                    self.log_debug(DebugLevel::Success, "LinkedIn: cookie li_at obtenu automatiquement !");
+                    self.toast("LinkedIn connecté (cookie li_at) !", theme::SUCCESS);
+                    self.refresh_settings_items();
+                }
                 AppMessage::LinkedInOAuth2Progress(msg) => {
                     self.log_debug(DebugLevel::Debug, format!("LinkedIn OAuth2: {}", msg));
                 }
@@ -641,6 +650,29 @@ impl MyCommercialApp {
                     }
                 }
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
+            }
+        });
+    }
+
+    pub fn launch_linkedin_login(&mut self) {
+        let email = self.settings.get_or_default("linkedin", "login_email", "");
+        let password = self.settings.get_or_default("linkedin", "login_password", "");
+        if email.is_empty() || password.is_empty() {
+            self.modal_error = Some("Configurez login_email et login_password dans Settings > LinkedIn.".into());
+            return;
+        }
+        self.linkedin_oauth_in_progress = true;
+        self.toast("Connexion LinkedIn en cours...", theme::INFO);
+        let tx = self.tx.clone();
+        let ctx = self.egui_ctx.clone();
+        self.runtime_handle.spawn(async move {
+            match LinkedInClient::login_get_cookie(&email, &password).await {
+                Ok(cookie) => {
+                    Self::send_msg(&tx, &ctx, AppMessage::LinkedInCookieObtained(cookie));
+                }
+                Err(e) => {
+                    Self::send_msg(&tx, &ctx, AppMessage::Error(format!("Login LinkedIn: {}", e)));
+                }
             }
         });
     }
