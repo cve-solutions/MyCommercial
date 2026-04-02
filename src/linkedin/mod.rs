@@ -398,7 +398,6 @@ queryParameters:(resultType:List(PEOPLE)))\
             .context("Envoi LinkedIn nécessite le cookie li_at.")?;
 
         let http_client = reqwest::Client::builder()
-            .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -414,26 +413,7 @@ queryParameters:(resultType:List(PEOPLE)))\
                 .timeout(std::time::Duration::from_secs(15))
         };
 
-        // Step 1: Find or create conversation with this person
-        // Use the conversations endpoint with participant public ID
-        let conv_url = format!(
-            "https://www.linkedin.com/voyager/api/messaging/conversations?\
-            keyVersion=LEGACY_INBOX&q=participants&recipients=List({})",
-            urlencoding::encode(recipient_id)
-        );
-
-        let conv_resp = voyager_headers(http_client.get(&conv_url), cookie)
-            .send()
-            .await
-            .context("Erreur recherche conversation LinkedIn")?;
-
-        let conv_status = conv_resp.status();
-
-        if conv_status.as_u16() == 302 || conv_status.as_u16() == 401 || conv_status.as_u16() == 403 {
-            anyhow::bail!("Cookie li_at expiré. Reconnectez-vous à LinkedIn et mettez à jour le cookie.");
-        }
-
-        // Step 2: Send message via legacy messaging API
+        // Send message via legacy messaging API
         let send_url = "https://www.linkedin.com/voyager/api/messaging/conversations";
 
         let payload = serde_json::json!({
