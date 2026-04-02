@@ -491,47 +491,49 @@ queryParameters:(resultType:List(PEOPLE)))\
         let recipient_urn = if recipient_id.starts_with("urn:li:") {
             recipient_id.to_string()
         } else {
-            // Resolve publicIdentifier to URN via search
-            let search_url = format!(
-                "https://www.linkedin.com/voyager/api/search/dash/clusters\
-                ?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-165\
-                &origin=GLOBAL_SEARCH_HEADER&q=all\
-                &query=(keywords:{},flagshipSearchIntent:SEARCH_SRP,\
-queryParameters:(resultType:List(PEOPLE)))&count=1",
+            // Resolve publicIdentifier via dash profiles API
+            let profile_url = format!(
+                "https://www.linkedin.com/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity={}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.WebTopCardCore-6",
                 urlencoding::encode(recipient_id)
             );
-            let search_resp = self.voyager_request(&http_client, reqwest::Method::GET, &search_url)?
+            let profile_resp = self.voyager_request(&http_client, reqwest::Method::GET, &profile_url)?
                 .send()
                 .await
-                .context("Erreur recherche profil LinkedIn")?;
+                .context("Erreur résolution profil LinkedIn")?;
 
-            if !search_resp.status().is_success() {
-                anyhow::bail!("Impossible de résoudre le profil '{}' (HTTP {}). Resauvez le contact depuis une nouvelle recherche LinkedIn.",
-                    recipient_id, search_resp.status());
+            if !profile_resp.status().is_success() {
+                anyhow::bail!("Profil '{}' introuvable (HTTP {}). Resauvez le contact.", recipient_id, profile_resp.status());
             }
 
-            let data: serde_json::Value = search_resp.json().await.unwrap_or_default();
+            let data: serde_json::Value = profile_resp.json().await.unwrap_or_default();
 
-            // Look for entityUrn in included profiles
-            let urn = data.get("included").and_then(|inc| inc.as_array())
-                .and_then(|items| {
-                    items.iter().find_map(|item| {
-                        let t = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
-                        if !t.contains("Profile") { return None; }
-                        let pub_id = item.get("publicIdentifier").and_then(|p| p.as_str())?;
-                        if pub_id == recipient_id {
-                            item.get("entityUrn").and_then(|u| u.as_str()).map(|s| s.to_string())
-                        } else {
-                            None
-                        }
-                    })
+            // Look for entityUrn in data.elements[] or included[]
+            let urn = data.get("data")
+                .and_then(|d| d.get("elements"))
+                .and_then(|e| e.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|el| el.get("entityUrn"))
+                .and_then(|u| u.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    // Fallback: search in included[]
+                    data.get("included").and_then(|inc| inc.as_array())
+                        .and_then(|items| {
+                            items.iter().find_map(|item| {
+                                let t = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+                                if !t.contains("Profile") { return None; }
+                                item.get("entityUrn").and_then(|u| u.as_str()).map(|s| s.to_string())
+                            })
+                        })
                 });
 
             match urn {
                 Some(u) => u,
-                None => anyhow::bail!(
-                    "Profil '{}' non trouvé dans les résultats LinkedIn. Resauvez le contact depuis une recherche.",
-                    recipient_id),
+                None => {
+                    let keys: Vec<String> = data.as_object()
+                        .map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                    anyhow::bail!("URN introuvable pour '{}'. Keys: {:?}", recipient_id, keys)
+                }
             }
         };
 
