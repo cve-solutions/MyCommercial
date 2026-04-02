@@ -392,73 +392,52 @@ queryParameters:(resultType:List(PEOPLE)))\
         })
     }
 
-    /// Construit les headers Voyager avec un vrai CSRF token
-    async fn get_voyager_session(&self) -> Result<(reqwest::Client, String, String)> {
+    fn voyager_request(&self, client: &reqwest::Client, method: reqwest::Method, url: &str) -> Result<reqwest::RequestBuilder> {
         let cookie = self.cookie_li_at.as_ref()
             .context("LinkedIn nécessite le cookie li_at.")?;
-
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        // GET /me to obtain JSESSIONID for CSRF
-        let resp = http_client
-            .get("https://www.linkedin.com/voyager/api/me")
-            .header("Cookie", format!("li_at={}", cookie))
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-            .context("Erreur obtention session LinkedIn")?;
-
-        if resp.status().as_u16() == 302 || resp.status().as_u16() == 401 {
-            anyhow::bail!("Cookie li_at expiré. Reconnectez-vous à LinkedIn et mettez à jour le cookie.");
-        }
-
-        let csrf = resp.cookies()
-            .find(|c| c.name() == "JSESSIONID")
-            .map(|c| c.value().trim_matches('"').to_string())
-            .unwrap_or_else(|| "ajax:0".to_string());
-
-        Ok((http_client, cookie.clone(), csrf))
-    }
-
-    fn voyager_get(&self, client: &reqwest::Client, url: &str, cookie: &str, csrf: &str) -> reqwest::RequestBuilder {
-        client.get(url)
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"{}\"", cookie, csrf))
-            .header("Csrf-Token", csrf)
+        Ok(client.request(method, url)
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
             .header("X-Li-Lang", "fr_FR")
             .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
             .header("X-Restli-Protocol-Version", "2.0.0")
             .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
             .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(15)))
     }
 
     /// Envoie un message LinkedIn à un contact via Voyager API
     pub async fn send_message(&self, recipient_id: &str, body: &str) -> Result<()> {
-        let (http_client, cookie, csrf) = self.get_voyager_session().await?;
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
 
         // Step 1: Resolve public ID to profile URN
         let profile_url = format!(
             "https://www.linkedin.com/voyager/api/identity/profiles/{}",
             urlencoding::encode(recipient_id)
         );
-        let profile_resp = self.voyager_get(&http_client, &profile_url, &cookie, &csrf)
+        let profile_resp = self.voyager_request(&http_client, reqwest::Method::GET, &profile_url)?
             .send()
             .await
             .context("Erreur récupération profil LinkedIn")?;
 
-        if !profile_resp.status().is_success() {
-            anyhow::bail!("Profil '{}' introuvable (HTTP {})", recipient_id, profile_resp.status());
+        let profile_status = profile_resp.status();
+        if !profile_status.is_success() {
+            let resp_body = profile_resp.text().await.unwrap_or_default();
+            anyhow::bail!("Profil '{}' : HTTP {} — {}", recipient_id, profile_status,
+                if resp_body.len() > 200 { &resp_body[..200] } else { &resp_body });
         }
 
         let profile_data: serde_json::Value = profile_resp.json().await
             .context("Erreur parsing profil")?;
 
-        let member_urn = Self::extract_member_id(&profile_data)
-            .context(format!("ID membre introuvable pour '{}'", recipient_id))?;
+        let member_id = Self::extract_member_id(&profile_data)
+            .context(format!("ID membre introuvable pour '{}'. Clés: {:?}",
+                recipient_id,
+                profile_data.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
+            ))?;
 
         // Step 2: Send message with miniProfile URN
         let payload = serde_json::json!({
@@ -472,22 +451,14 @@ queryParameters:(resultType:List(PEOPLE)))\
                         }
                     }
                 },
-                "recipients": [format!("urn:li:fs_miniProfile:{}", member_urn)],
+                "recipients": [format!("urn:li:fs_miniProfile:{}", member_id)],
                 "subtype": "MEMBER_TO_MEMBER"
             }
         });
 
-        let resp = http_client
-            .post("https://www.linkedin.com/voyager/api/messaging/conversations")
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"{}\"", cookie, csrf))
-            .header("Csrf-Token", &csrf)
+        let resp = self.voyager_request(&http_client, reqwest::Method::POST,
+            "https://www.linkedin.com/voyager/api/messaging/conversations")?
             .header("Content-Type", "application/json")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
             .json(&payload)
             .send()
             .await
@@ -497,7 +468,7 @@ queryParameters:(resultType:List(PEOPLE)))\
         let resp_body = resp.text().await.unwrap_or_default();
 
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            anyhow::bail!("LinkedIn auth échouée (HTTP {}).", status);
+            anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
         }
 
         if !status.is_success() && status.as_u16() != 201 {
