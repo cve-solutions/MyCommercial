@@ -197,15 +197,14 @@ impl LinkedInClient {
 
     /// Envoie un message LinkedIn via linkedin-api (Python)
     pub async fn send_message(&self, recipient_id: &str, body: &str) -> Result<()> {
-        // Determine if we have a URN or publicIdentifier
-        let params = if recipient_id.starts_with("ACoA") || recipient_id.contains("urn_id") {
-            // URN ID from search results
+        // Always pass both urn and public_id when possible
+        let params = if recipient_id.starts_with("ACoA") {
             serde_json::json!({
                 "recipients": [recipient_id],
                 "message": body,
             })
         } else {
-            // Public identifier — let Python resolve it
+            // publicIdentifier — Python will resolve via get_profile
             serde_json::json!({
                 "public_id": recipient_id,
                 "message": body,

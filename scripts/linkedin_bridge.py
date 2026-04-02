@@ -121,20 +121,32 @@ def do_send(api, params):
 
     # Resolve public_id to urn_id if needed
     if public_id and not recipients:
-        profile = api.get_profile(public_id=public_id)
-        urn_id = profile.get("profile_id") or profile.get("member_urn_id")
-        if urn_id:
-            recipients = [urn_id]
-        else:
-            return {"error": f"Cannot resolve profile '{public_id}' to URN"}
+        try:
+            profile = api.get_profile(public_id=public_id)
+            urn_id = profile.get("profile_id") or profile.get("member_urn_id")
+            if urn_id:
+                recipients = [urn_id]
+            else:
+                available_keys = [k for k in profile.keys() if 'id' in k.lower() or 'urn' in k.lower()]
+                return {"error": f"Cannot resolve '{public_id}'. Keys with id/urn: {available_keys}"}
+        except Exception as e:
+            return {"error": f"Erreur résolution profil '{public_id}': {e}"}
 
     if not recipients:
         return {"error": "recipients or public_id required"}
 
-    error = api.send_message(message_body=message, recipients=recipients)
-    if error:
-        return {"error": "LinkedIn a refusé l'envoi du message (rate limit ou destinataire non joignable)"}
-    return {"ok": True, "message": "Message envoyé"}
+    try:
+        result = api.send_message(message_body=message, recipients=recipients)
+        # send_message returns True if ERROR, False if success
+        if result is True:
+            return {"error": f"LinkedIn a refusé le message vers {recipients}. Vérifiez que vous êtes connecté avec cette personne."}
+        elif result is False or result is None:
+            return {"ok": True, "message": "Message envoyé"}
+        else:
+            # Some versions return the response object
+            return {"ok": True, "message": f"Message envoyé (response={result})"}
+    except Exception as e:
+        return {"error": f"Erreur envoi: {e}"}
 
 
 def do_profile(api, params):
