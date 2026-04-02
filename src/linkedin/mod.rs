@@ -403,69 +403,59 @@ queryParameters:(resultType:List(PEOPLE)))\
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Step 1: Resolve public identifier to internal profile URN
-        let profile_url = format!(
-            "https://www.linkedin.com/voyager/api/identity/profiles/{}",
+        let voyager_headers = |req: reqwest::RequestBuilder, cookie: &str| -> reqwest::RequestBuilder {
+            req.header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+                .header("Csrf-Token", "ajax:0")
+                .header("X-Li-Lang", "fr_FR")
+                .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
+                .header("X-Restli-Protocol-Version", "2.0.0")
+                .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .timeout(std::time::Duration::from_secs(15))
+        };
+
+        // Step 1: Find or create conversation with this person
+        // Use the conversations endpoint with participant public ID
+        let conv_url = format!(
+            "https://www.linkedin.com/voyager/api/messaging/conversations?\
+            keyVersion=LEGACY_INBOX&q=participants&recipients=List({})",
             urlencoding::encode(recipient_id)
         );
 
-        let profile_resp = http_client
-            .get(&profile_url)
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
+        let conv_resp = voyager_headers(http_client.get(&conv_url), cookie)
             .send()
             .await
-            .context("Erreur récupération profil LinkedIn")?;
+            .context("Erreur recherche conversation LinkedIn")?;
 
-        if !profile_resp.status().is_success() {
-            let status = profile_resp.status();
-            let resp_body = profile_resp.text().await.unwrap_or_default();
-            anyhow::bail!("Profil LinkedIn '{}' : HTTP {} — {}", recipient_id, status,
-                if resp_body.len() > 200 { &resp_body[..200] } else { &resp_body });
+        let conv_status = conv_resp.status();
+
+        if conv_status.as_u16() == 302 || conv_status.as_u16() == 401 || conv_status.as_u16() == 403 {
+            anyhow::bail!("Cookie li_at expiré. Reconnectez-vous à LinkedIn et mettez à jour le cookie.");
         }
 
-        let profile_text = profile_resp.text().await.unwrap_or_default();
-        let profile_data: serde_json::Value = serde_json::from_str(&profile_text)
-            .context("Erreur parsing profil LinkedIn")?;
+        // Step 2: Send message via legacy messaging API
+        let send_url = "https://www.linkedin.com/voyager/api/messaging/conversations";
 
-        // Extract member ID from various response formats
-        let member_id = Self::extract_member_id(&profile_data)
-            .context(format!("Impossible de trouver l'ID membre pour '{}'. Clés: {:?}",
-                recipient_id,
-                profile_data.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
-            ))?;
-
-        // Step 2: Send message
         let payload = serde_json::json!({
-            "message": {
-                "body": {
-                    "text": body
+            "keyVersion": "LEGACY_INBOX",
+            "conversationCreate": {
+                "eventCreate": {
+                    "value": {
+                        "com.linkedin.voyager.messaging.create.MessageCreate": {
+                            "body": body,
+                            "attachments": []
+                        }
+                    }
                 },
-                "originToken": ""
-            },
-            "mailboxUrn": format!("urn:li:fsd_profile:{}", member_id),
-            "trackingId": "",
-            "dedupeByClientGeneratedToken": false,
-            "hostRecipientUrns": [format!("urn:li:fsd_profile:{}", member_id)]
+                "recipients": [recipient_id],
+                "subtype": "MEMBER_TO_MEMBER"
+            }
         });
 
-        let resp = http_client
-            .post("https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage")
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
-            .header("Content-Type", "application/json")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(15))
+        let resp = voyager_headers(
+            http_client.post(send_url).header("Content-Type", "application/json"),
+            cookie
+        )
             .json(&payload)
             .send()
             .await
@@ -474,7 +464,11 @@ queryParameters:(resultType:List(PEOPLE)))\
         let status = resp.status();
         let resp_body = resp.text().await.unwrap_or_default();
 
-        if !status.is_success() {
+        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
+            anyhow::bail!("Cookie li_at expiré (HTTP {}). Reconnectez-vous à LinkedIn.", status);
+        }
+
+        if !status.is_success() && status.as_u16() != 201 {
             anyhow::bail!("Envoi LinkedIn {} : {}", status,
                 if resp_body.len() > 400 { &resp_body[..400] } else { &resp_body });
         }
@@ -482,8 +476,8 @@ queryParameters:(resultType:List(PEOPLE)))\
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn extract_member_id(data: &serde_json::Value) -> Option<String> {
-        // Try data.entityUrn or data.data.entityUrn
         for path in &[
             vec!["entityUrn"],
             vec!["data", "entityUrn"],
@@ -500,7 +494,6 @@ queryParameters:(resultType:List(PEOPLE)))\
             }
             if found {
                 if let Some(urn) = current.as_str() {
-                    // "urn:li:fsd_profile:ABC123" or "urn:li:member:12345"
                     if let Some(id) = urn.rsplit(':').next() {
                         return Some(id.to_string());
                     }
@@ -508,7 +501,6 @@ queryParameters:(resultType:List(PEOPLE)))\
             }
         }
 
-        // Try looking in "included" array for profiles
         if let Some(included) = data.get("included").and_then(|i| i.as_array()) {
             for item in included {
                 let type_name = item.get("$type").and_then(|t| t.as_str()).unwrap_or("");
