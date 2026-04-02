@@ -136,15 +136,34 @@ def do_send(api, params):
         return {"error": "recipients or public_id required"}
 
     try:
+        # Monkey-patch to capture the actual response
+        original_post = api.client.session.post
+        last_response = {}
+
+        def patched_post(*args, **kwargs):
+            resp = original_post(*args, **kwargs)
+            last_response['status'] = resp.status_code
+            last_response['text'] = resp.text[:500] if resp.text else ''
+            return resp
+
+        api.client.session.post = patched_post
+
         result = api.send_message(message_body=message, recipients=recipients)
-        # send_message returns True if ERROR, False if success
-        if result is True:
-            return {"error": f"LinkedIn a refusé le message vers {recipients}. Vérifiez que vous êtes connecté avec cette personne."}
-        elif result is False or result is None:
-            return {"ok": True, "message": "Message envoyé"}
+
+        # Restore original
+        api.client.session.post = original_post
+
+        status = last_response.get('status', 0)
+        resp_text = last_response.get('text', '')
+
+        # send_message returns True if status != 201
+        # But 200 is also success for some endpoints
+        if status in (200, 201):
+            return {"ok": True, "message": f"Message envoyé (HTTP {status})"}
+        elif result is True:
+            return {"error": f"LinkedIn a refusé le message vers {recipients} (HTTP {status}). Réponse: {resp_text[:200]}"}
         else:
-            # Some versions return the response object
-            return {"ok": True, "message": f"Message envoyé (response={result})"}
+            return {"ok": True, "message": f"Message envoyé (result={result}, HTTP {status})"}
     except Exception as e:
         return {"error": f"Erreur envoi: {e}"}
 
