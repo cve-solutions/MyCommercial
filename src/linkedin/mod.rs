@@ -419,19 +419,33 @@ queryParameters:(resultType:List(PEOPLE)))\
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Determine recipient URN
-        let recipient_urn = if recipient_id.starts_with("urn:li:") {
-            // Already a URN — use directly
-            recipient_id.to_string()
+        // Build recipient list based on format
+        let recipients = if recipient_id.starts_with("urn:li:") {
+            serde_json::json!([recipient_id])
         } else {
-            // publicIdentifier — wrap as miniProfile URN
-            // (the legacy API also accepts publicIdentifier directly in some cases)
-            recipient_id.to_string()
+            serde_json::json!([recipient_id])
         };
 
-        let payload = serde_json::json!({
-            "keyVersion": "LEGACY_INBOX",
-            "conversationCreate": {
+        // Try multiple payload formats
+        let payloads = vec![
+            // Format 1: Standard legacy messaging
+            serde_json::json!({
+                "keyVersion": "LEGACY_INBOX",
+                "conversationCreate": {
+                    "eventCreate": {
+                        "value": {
+                            "com.linkedin.voyager.messaging.create.MessageCreate": {
+                                "body": body,
+                                "attachments": []
+                            }
+                        }
+                    },
+                    "recipients": recipients,
+                    "subtype": "MEMBER_TO_MEMBER"
+                }
+            }),
+            // Format 2: Action-based messaging
+            serde_json::json!({
                 "eventCreate": {
                     "value": {
                         "com.linkedin.voyager.messaging.create.MessageCreate": {
@@ -440,32 +454,40 @@ queryParameters:(resultType:List(PEOPLE)))\
                         }
                     }
                 },
-                "recipients": [recipient_urn],
+                "recipients": recipients,
                 "subtype": "MEMBER_TO_MEMBER"
+            }),
+        ];
+
+        let mut last_status = 0u16;
+        let mut last_body = String::new();
+
+        for payload in &payloads {
+            let resp = self.voyager_request(&http_client, reqwest::Method::POST,
+                "https://www.linkedin.com/voyager/api/messaging/conversations")?
+                .header("Content-Type", "application/json")
+                .json(payload)
+                .send()
+                .await
+                .context("Erreur d'envoi de message LinkedIn")?;
+
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+
+            if status.is_success() || status.as_u16() == 201 {
+                return Ok(());
             }
-        });
 
-        let resp = self.voyager_request(&http_client, reqwest::Method::POST,
-            "https://www.linkedin.com/voyager/api/messaging/conversations")?
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .context("Erreur d'envoi de message LinkedIn")?;
+            if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
+                anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
+            }
 
-        let status = resp.status();
-        let resp_body = resp.text().await.unwrap_or_default();
-
-        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
-            anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
+            last_status = status.as_u16();
+            last_body = resp_body;
         }
 
-        if !status.is_success() && status.as_u16() != 201 {
-            anyhow::bail!("Envoi LinkedIn {} : {}", status,
-                if resp_body.len() > 400 { &resp_body[..400] } else { &resp_body });
-        }
-
-        Ok(())
+        anyhow::bail!("Envoi LinkedIn {} (recipient='{}') : {}", last_status, recipient_id,
+            if last_body.len() > 400 { &last_body[..400] } else { &last_body });
     }
 
     #[allow(dead_code)]
