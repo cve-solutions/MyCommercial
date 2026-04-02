@@ -402,18 +402,29 @@ queryParameters:(resultType:List(PEOPLE)))\
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        let voyager_headers = |req: reqwest::RequestBuilder, cookie: &str| -> reqwest::RequestBuilder {
-            req.header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-                .header("Csrf-Token", "ajax:0")
-                .header("X-Li-Lang", "fr_FR")
-                .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
-                .header("X-Restli-Protocol-Version", "2.0.0")
-                .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-                .timeout(std::time::Duration::from_secs(15))
-        };
+        // Step 1: Get a valid CSRF token by fetching a page with li_at
+        // The JSESSIONID cookie from LinkedIn acts as the CSRF token
+        let csrf_resp = http_client
+            .get("https://www.linkedin.com/voyager/api/me")
+            .header("Cookie", format!("li_at={}", cookie))
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .context("Erreur obtention session LinkedIn")?;
 
-        // Send message via legacy messaging API
+        // Extract JSESSIONID from response cookies
+        let jsessionid = csrf_resp.cookies()
+            .find(|c| c.name() == "JSESSIONID")
+            .map(|c| c.value().trim_matches('"').to_string());
+
+        let csrf_token = jsessionid.as_deref().unwrap_or("ajax:0");
+
+        if csrf_resp.status().as_u16() == 302 || csrf_resp.status().as_u16() == 401 {
+            anyhow::bail!("Cookie li_at expiré. Reconnectez-vous à LinkedIn et mettez à jour le cookie.");
+        }
+
+        // Step 2: Send message with valid CSRF token
         let send_url = "https://www.linkedin.com/voyager/api/messaging/conversations";
 
         let payload = serde_json::json!({
@@ -432,10 +443,17 @@ queryParameters:(resultType:List(PEOPLE)))\
             }
         });
 
-        let resp = voyager_headers(
-            http_client.post(send_url).header("Content-Type", "application/json"),
-            cookie
-        )
+        let resp = http_client
+            .post(send_url)
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"{}\"", cookie, csrf_token))
+            .header("Csrf-Token", csrf_token)
+            .header("Content-Type", "application/json")
+            .header("X-Li-Lang", "fr_FR")
+            .header("X-Li-Track", "{\"clientVersion\":\"1.13.8622\"}")
+            .header("X-Restli-Protocol-Version", "2.0.0")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(15))
             .json(&payload)
             .send()
             .await
@@ -444,8 +462,8 @@ queryParameters:(resultType:List(PEOPLE)))\
         let status = resp.status();
         let resp_body = resp.text().await.unwrap_or_default();
 
-        if status.as_u16() == 302 || status.as_u16() == 401 || status.as_u16() == 403 {
-            anyhow::bail!("Cookie li_at expiré (HTTP {}). Reconnectez-vous à LinkedIn.", status);
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            anyhow::bail!("LinkedIn auth échouée (HTTP {}). Vérifiez le cookie li_at.", status);
         }
 
         if !status.is_success() && status.as_u16() != 201 {
