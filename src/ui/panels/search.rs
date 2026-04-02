@@ -18,6 +18,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         );
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             app.search_entreprises_page = 1;
+            app.search_contacts_page = 0;
             match app.search_mode {
                 SearchMode::Entreprises => app.launch_search_entreprises(),
                 SearchMode::LinkedIn => app.launch_search_linkedin(),
@@ -29,6 +30,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 
         if ui.button("\u{1f50d} Rechercher").clicked() {
             app.search_entreprises_page = 1;
+            app.search_contacts_page = 0;
             match app.search_mode {
                 SearchMode::Entreprises => app.launch_search_entreprises(),
                 SearchMode::LinkedIn => app.launch_search_linkedin(),
@@ -157,16 +159,17 @@ fn show_entreprises(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
 }
 
 fn show_linkedin(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
+    let page = app.search_contacts_page;
     ui.label(theme::subheading(&format!(
-        "Contacts LinkedIn trouvés : {}",
-        app.search_contacts.len()
+        "Contacts LinkedIn : {} — Page {}",
+        app.search_contacts.len(), page + 1
     )));
     ui.add_space(5.0);
 
     let mut to_save: Option<usize> = None;
 
     let available = ui.available_height();
-    egui::ScrollArea::vertical().max_height(available - 10.0).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(available - 40.0).show(ui, |ui| {
         egui_extras::TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
@@ -210,6 +213,24 @@ fn show_linkedin(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 Err(e) => app.modal_error = Some(format!("{}", e)),
             }
         }
+    }
+
+    // ── Pagination LinkedIn ──
+    if app.search_contacts.len() >= 25 || page > 0 {
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            if page > 0 {
+                if ui.button("\u{2b05} Page précédente").clicked() {
+                    app.launch_search_linkedin_page(page - 1);
+                }
+            }
+            ui.label(egui::RichText::new(format!("Page {}", page + 1)).color(theme::TEXT_DIM));
+            if app.search_contacts.len() >= 25 {
+                if ui.button("Page suivante \u{27a1}").clicked() {
+                    app.launch_search_linkedin_page(page + 1);
+                }
+            }
+        });
     }
 }
 

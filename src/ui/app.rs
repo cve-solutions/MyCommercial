@@ -132,6 +132,7 @@ pub struct MyCommercialApp {
     pub search_code_ape: String,
     pub search_effectifs: usize, // index into TrancheEffectifs::all(), 0 = Tous
     pub search_contacts: Vec<Contact>,
+    pub search_contacts_page: u32,
     pub search_loading: bool,
     pub selected_entreprise: Option<Entreprise>,
 
@@ -224,6 +225,7 @@ impl MyCommercialApp {
             search_code_ape: String::new(),
             search_effectifs: 0,
             search_contacts: vec![],
+            search_contacts_page: 0,
             search_loading: false,
             selected_entreprise: None,
             contacts, contacts_page: 0, _contact_selected: None,
@@ -423,13 +425,19 @@ impl MyCommercialApp {
     }
 
     pub fn launch_search_linkedin(&mut self) {
+        self.launch_search_linkedin_page(self.search_contacts_page);
+    }
+
+    pub fn launch_search_linkedin_page(&mut self, page: u32) {
         if self.search_query.is_empty() { return; }
         self.search_loading = true;
+        self.search_contacts_page = page;
         let tx = self.tx.clone();
         let ctx = self.egui_ctx.clone();
         let q = self.search_query.clone();
         let s = SettingsManager::new(self.db.clone());
         let postes = self.settings.postes_cibles();
+        let start = page * 25;
         self.runtime_handle.spawn(async move {
             match LinkedInClient::new(&s) {
                 Ok(client) => {
@@ -438,9 +446,9 @@ impl MyCommercialApp {
                         return;
                     }
                     let title = postes.first().map(|s| s.as_str()).unwrap_or("CEO");
-                    match client.search_people_debug(&q, title, None, 0, 25).await {
+                    match client.search_people_debug(&q, title, None, start, 25).await {
                         Ok((c, debug_info)) => {
-                            if c.is_empty() {
+                            if c.is_empty() && page == 0 {
                                 Self::send_msg(&tx, &ctx, AppMessage::Info(
                                     format!("LinkedIn: 0 résultat pour '{}'. Debug: {}", q, debug_info)
                                 ));
@@ -602,11 +610,12 @@ impl MyCommercialApp {
         let ctx = self.egui_ctx.clone();
         let s = SettingsManager::new(self.db.clone());
         let tmpl = self.settings.message_template();
+        let signature = self.settings.get_or_default("prospection", "signature", "");
         self.runtime_handle.spawn(async move {
             let c = OllamaClient::new(&s);
             let cid = contact.id.unwrap_or(0);
             match c.generate_prospection_message(&contact.prenom, &contact.poste,
-                contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl).await {
+                contact.entreprise_nom.as_deref().unwrap_or(""), &resume, &tmpl, &signature).await {
                 Ok(m) => Self::send_msg(&tx, &ctx, AppMessage::MessageGenerated { contact_id: cid, message: m }),
                 Err(e) => Self::send_msg(&tx, &ctx, AppMessage::Error(format!("{}", e))),
             }

@@ -392,20 +392,37 @@ queryParameters:(resultType:List(PEOPLE)))\
         })
     }
 
-    /// Envoie un message LinkedIn à un contact
+    /// Envoie un message LinkedIn à un contact via Voyager API
     pub async fn send_message(&self, recipient_id: &str, body: &str) -> Result<()> {
-        let (header_name, header_value) = self.auth_header()?;
+        let cookie = self.cookie_li_at.as_ref()
+            .context("Envoi LinkedIn nécessite le cookie li_at.")?;
 
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        // Step 1: Create conversation via messaging
         let payload = serde_json::json!({
-            "recipients": [format!("urn:li:person:{}", recipient_id)],
-            "body": body,
+            "message": {
+                "body": {
+                    "text": body
+                }
+            },
+            "recipients": [recipient_id],
+            "subtype": "MEMBER_TO_MEMBER"
         });
 
-        let resp = self.client
-            .post("https://api.linkedin.com/v2/messages")
-            .header(&header_name, &header_value)
+        let resp = http_client
+            .post("https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage")
+            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
+            .header("Csrf-Token", "ajax:0")
             .header("Content-Type", "application/json")
+            .header("X-Li-Lang", "fr_FR")
             .header("X-Restli-Protocol-Version", "2.0.0")
+            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .timeout(std::time::Duration::from_secs(15))
             .json(&payload)
             .send()
             .await
@@ -413,8 +430,9 @@ queryParameters:(resultType:List(PEOPLE)))\
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Erreur envoi message LinkedIn {}: {}", status, body);
+            let resp_body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Erreur envoi message LinkedIn {} : {}", status,
+                if resp_body.len() > 300 { &resp_body[..300] } else { &resp_body });
         }
 
         Ok(())

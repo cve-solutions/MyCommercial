@@ -13,7 +13,29 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
             ui.label(theme::subheading(&format!("Page {} | {} contacts", app.contacts_page + 1, app.contacts.len())));
         });
     });
-    ui.add_space(8.0);
+
+    // Solution selector
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label("Solution pour le message :");
+        let sol_names: Vec<String> = app.solutions.iter().map(|s| s.nom.clone()).collect();
+        let current = if let Some(idx) = app.solution_selected {
+            sol_names.get(idx).cloned().unwrap_or_else(|| "Aucune".into())
+        } else {
+            "Aucune".into()
+        };
+        egui::ComboBox::from_id_salt("sol_select_contacts")
+            .selected_text(&current)
+            .show_ui(ui, |ui| {
+                for (i, name) in sol_names.iter().enumerate() {
+                    let sel = app.solution_selected == Some(i);
+                    if ui.selectable_value(&mut app.solution_selected, Some(i), name).clicked() && !sel {
+                        // selection changed
+                    }
+                }
+            });
+    });
+    ui.add_space(4.0);
 
     let mut action: Option<ContactAction> = None;
 
@@ -87,10 +109,17 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
     match action {
         Some(ContactAction::GenerateMessage(idx)) => {
             if let Some(c) = app.contacts.get(idx).cloned() {
-                let resume = app.solutions.first()
-                    .and_then(|s| s.resume_ia.clone())
-                    .unwrap_or_else(|| "nos solutions innovantes".into());
-                app.launch_generate_message(c, resume);
+                let sol = app.solution_selected
+                    .and_then(|i| app.solutions.get(i));
+                if sol.is_none() {
+                    app.modal_error = Some("Sélectionnez d'abord une solution dans le menu déroulant ci-dessus.".into());
+                } else {
+                    let s = sol.unwrap();
+                    let resume = s.resume_ia.clone()
+                        .or_else(|| Some(s.description.clone()))
+                        .unwrap_or_else(|| s.nom.clone());
+                    app.launch_generate_message(c, resume);
+                }
             }
         }
         Some(ContactAction::Delete(idx)) => {
