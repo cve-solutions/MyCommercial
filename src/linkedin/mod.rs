@@ -402,37 +402,78 @@ queryParameters:(resultType:List(PEOPLE)))\
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Step 1: Create conversation via messaging
+        let make_headers = |cookie: &str| -> Vec<(&str, String)> {
+            vec![
+                ("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie)),
+                ("Csrf-Token", "ajax:0".into()),
+                ("X-Li-Lang", "fr_FR".into()),
+                ("X-Restli-Protocol-Version", "2.0.0".into()),
+                ("Accept", "application/vnd.linkedin.normalized+json+2.1".into()),
+                ("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36".into()),
+            ]
+        };
+
+        // Step 1: Resolve public identifier to internal profile URN
+        let profile_url = format!(
+            "https://www.linkedin.com/voyager/api/identity/profiles/{}",
+            urlencoding::encode(recipient_id)
+        );
+        let headers = make_headers(cookie);
+        let mut req = http_client.get(&profile_url).timeout(std::time::Duration::from_secs(15));
+        for (k, v) in &headers { req = req.header(*k, v); }
+        let profile_resp = req.send().await
+            .context("Erreur récupération profil LinkedIn")?;
+
+        if !profile_resp.status().is_success() {
+            anyhow::bail!("Profil LinkedIn introuvable pour '{}' (HTTP {})", recipient_id, profile_resp.status());
+        }
+
+        let profile_data: serde_json::Value = profile_resp.json().await
+            .context("Erreur parsing profil LinkedIn")?;
+
+        // Extract entityUrn or miniProfile entityUrn
+        let entity_urn = profile_data.get("entityUrn")
+            .or_else(|| profile_data.get("data").and_then(|d| d.get("entityUrn")))
+            .or_else(|| profile_data.get("miniProfile").and_then(|m| m.get("entityUrn")))
+            .and_then(|u| u.as_str())
+            .context(format!("Impossible de trouver l'URN du profil '{}'. Réponse: {}",
+                recipient_id,
+                serde_json::to_string(&profile_data).unwrap_or_default().chars().take(200).collect::<String>()))?;
+
+        // Convert fsd_profile URN to mailbox URN
+        // entityUrn: "urn:li:fsd_profile:ABC123" -> we need the member ID
+        let member_id = entity_urn.rsplit(':').next().unwrap_or(entity_urn);
+
+        // Step 2: Send message via messaging endpoint
         let payload = serde_json::json!({
             "message": {
                 "body": {
                     "text": body
-                }
+                },
+                "originToken": ""
             },
-            "recipients": [recipient_id],
-            "subtype": "MEMBER_TO_MEMBER"
+            "mailboxUrn": format!("urn:li:fsd_profile:{}", member_id),
+            "trackingId": "",
+            "dedupeByClientGeneratedToken": false,
+            "hostRecipientUrns": [format!("urn:li:fsd_profile:{}", member_id)]
         });
 
-        let resp = http_client
+        let headers = make_headers(cookie);
+        let mut req = http_client
             .post("https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage")
-            .header("Cookie", format!("li_at={}; JSESSIONID=\"ajax:0\"", cookie))
-            .header("Csrf-Token", "ajax:0")
             .header("Content-Type", "application/json")
-            .header("X-Li-Lang", "fr_FR")
-            .header("X-Restli-Protocol-Version", "2.0.0")
-            .header("Accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(15))
-            .json(&payload)
-            .send()
-            .await
-            .context("Erreur d'envoi de message LinkedIn")?;
+            .json(&payload);
+        for (k, v) in &headers { req = req.header(*k, v); }
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let resp_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Erreur envoi message LinkedIn {} : {}", status,
-                if resp_body.len() > 300 { &resp_body[..300] } else { &resp_body });
+        let resp = req.send().await.context("Erreur d'envoi de message LinkedIn")?;
+
+        let status = resp.status();
+        let resp_body = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            anyhow::bail!("Envoi LinkedIn {} : {}", status,
+                if resp_body.len() > 400 { &resp_body[..400] } else { &resp_body });
         }
 
         Ok(())
