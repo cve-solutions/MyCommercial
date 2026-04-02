@@ -328,9 +328,10 @@ impl MyCommercialApp {
                     self.solutions = db::get_solutions(&self.db).unwrap_or_default();
                 }
                 AppMessage::MessageGenerated { contact_id, message } => {
+                    let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
                     let m = ProspectionMessage {
                         id: None, contact_id, contenu: message, status: MessageStatus::Draft,
-                        date_envoi: None, date_reponse: None, solution_id: None, odoo_lead_id: None,
+                        date_envoi: Some(now), date_reponse: None, solution_id: None, odoo_lead_id: None,
                     };
                     let _ = db::insert_message(&self.db, &m);
                     self.toast("Message brouillon créé !", theme::SUCCESS);

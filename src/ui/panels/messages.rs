@@ -38,10 +38,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                 header.col(|ui| { ui.strong("Actions"); });
             })
             .body(|mut body| {
-                for (i, (msg, contact)) in app.messages.iter().enumerate() {
+                let messages = app.messages.clone();
+                for (i, (msg, contact)) in messages.iter().enumerate() {
+                    let selected = app.message_selected == Some(i);
                     body.row(24.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(format!("{} {}", contact.prenom, contact.nom));
+                            let text = format!("{} {}", contact.prenom, contact.nom);
+                            let rt = if selected {
+                                egui::RichText::new(text).color(theme::PRIMARY).strong()
+                            } else {
+                                egui::RichText::new(text)
+                            };
+                            if ui.selectable_label(selected, rt).clicked() {
+                                app.message_selected = Some(i);
+                            }
                         });
                         row.col(|ui| {
                             ui.label(contact.entreprise_nom.as_deref().unwrap_or("—"));
@@ -54,8 +64,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
                             ui.label(msg.date_envoi.as_deref().unwrap_or("—"));
                         });
                         row.col(|ui| {
-                            let preview: String = msg.contenu.chars().take(60).collect();
-                            ui.label(egui::RichText::new(preview).color(theme::TEXT_DIM));
+                            let preview: String = msg.contenu.chars().take(80).collect();
+                            let suffix = if msg.contenu.len() > 80 { "..." } else { "" };
+                            ui.label(egui::RichText::new(format!("{}{}", preview, suffix)).color(theme::TEXT_DIM));
                         });
                         row.col(|ui| {
                             ui.horizontal(|ui| {
@@ -77,9 +88,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut MyCommercialApp) {
         if let Some((msg, contact)) = app.messages.get(sel) {
             ui.add_space(5.0);
             ui.group(|ui| {
-                ui.label(theme::subheading(&format!("Message à {} {} ({})", contact.prenom, contact.nom, msg.status.as_str())));
+                ui.horizontal(|ui| {
+                    ui.label(theme::subheading(&format!(
+                        "Message à {} {} — {} — {}",
+                        contact.prenom, contact.nom,
+                        msg.status.as_str(),
+                        msg.date_envoi.as_deref().unwrap_or("pas de date"),
+                    )));
+                });
                 ui.add_space(4.0);
-                ui.label(&msg.contenu);
+                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(&msg.contenu).color(theme::TEXT)
+                    ).wrap());
+                });
             });
         }
     }

@@ -42,6 +42,7 @@ impl OdooClient {
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
+                .cookie_store(true)
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             url: settings.odoo_url().trim().trim_end_matches('/').to_string(),
